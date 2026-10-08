@@ -64,7 +64,7 @@ if not st.session_state.user:
                     st.session_state.user_role = "Legal & Compliance" if "legal" in email.lower() else "Marketing Team"
                 
                 st.rerun()
-           except Exception as e:
+                except Exception as e:
                 st.error(f"Login failed. Error details: {e}")
     
     st.warning("👈 Please log in using the sidebar to access the portal.")
