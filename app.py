@@ -176,4 +176,128 @@ elif st.session_state.user_role == "Legal & Compliance":
                                 st.error(f"Failed to extract PDF text: {e}")
                         # Handle standard Text / Markdown files
                         else:
-                            extracted_
+                            extracted_text = uploaded_file.getvalue().decode("utf-8")
+                        
+                        if extracted_text:
+                            supabase.table("evidence").insert({
+                                "title": study_title,
+                                "evidence_type": evidence_type,
+                                "added_by": added_by,
+                                "description": study_desc,
+                                "study_content": extracted_text,
+                                "status": "Active"
+                            }).execute()
+                            st.success("Study parsed and published to database!")
+                            st.rerun()
+                            
+        st.markdown("###")
+        
+        # --- 2. VIEW CATALOG WITH SEARCH, VISUAL LINKS, AND SOFT DELETE ---
+        try:
+            # Fetch records
+            evidence_resp = supabase.table("evidence").select("*").order("created_at", desc=True).execute()
+            evidence_data = evidence_resp.data
+            
+            if evidence_data:
+                # Filter by search query
+                if search_query:
+                    q = search_query.lower()
+                    evidence_data = [
+                        e for e in evidence_data 
+                        if q in str(e.get('title', '')).lower() 
+                        or q in str(e.get('description', '')).lower()
+                    ]
+                
+                st.caption(f"Showing **{len(evidence_data)}** clinical evidence records.")
+                st.divider()
+                
+                for study in evidence_data:
+                    with st.expander(f"📄 {study.get('title', 'Untitled Study')} ({study.get('status', 'Active')})"):
+                        col1, col2 = st.columns(2)
+                        col1.write(f"**Type:** {study.get('evidence_type', 'N/A')}")
+                        col2.write(f"**Added By:** {study.get('added_by', 'N/A')}")
+                        
+                        st.write(f"**Summary:** {study.get('description', '')}")
+                        
+                        # 🔗 SAFELY Fetch Linked Claims (Won't crash if database structure is mismatched)
+                        try:
+                            approved_claims = supabase.table("claims").select("*").eq("evidence_id", study['id']).execute()
+                            pending_claims = supabase.table("claim_submissions").select("*").eq("evidence_id", study['id']).eq("human_status", "Pending Review").execute()
+                            
+                            if approved_claims.data or pending_claims.data:
+                                st.markdown("---")
+                                st.write("🔗 **Tied Claims:**")
+                                
+                                for c in approved_claims.data:
+                                    tier = c.get('tier') or c.get('target_tier') or 'Claim'
+                                    claim_text = c.get('claim_text') or c.get('claim') or c.get('proposed_claim', '')
+                                    st.caption(f"✅ **[{tier}] Approved Master Claim:** {claim_text}")
+                                    
+                                for pc in pending_claims.data:
+                                    tier = pc.get('target_tier', 'Claim')
+                                    st.caption(f"⏳ **[{tier}] Pending Review Submission:** {pc.get('proposed_claim', '')}")
+                            else:
+                                st.markdown("---")
+                                st.caption("🔗 *No claims currently tied to this study.*")
+                        except Exception:
+                            st.markdown("---")
+                            st.caption(f"⚠️ *Could not load linked claims. (Database check needed).*")
+                        
+                        if study.get("study_content"):
+                            st.markdown("---")
+                            st.markdown(study["study_content"])
+                            
+                        # 🗄️ Soft Delete / Archive Button
+                        if study.get('status') == 'Active':
+                            st.markdown("---")
+                            col_space, col_del = st.columns([4, 1])
+                            with col_del:
+                                if st.button("🗄️ Mark as Outdated", key=f"outdate_{study['id']}", type="secondary", use_container_width=True):
+                                    supabase.table("evidence").update({"status": "Outdated"}).eq("id", study['id']).execute()
+                                    st.toast("Study filed as Outdated!")
+                                    st.rerun()
+                                    
+            else:
+                st.info("No clinical evidence records found.")
+        except Exception as e:
+            st.error(f"Error fetching evidence data: {e}")
+
+    # --------------------------------------------------------------------------
+    # TAB 2: CLAIMS REVIEW QUEUE
+    # --------------------------------------------------------------------------
+    with tab_pipeline:
+        st.subheader("⚖️ Pending Claims Review")
+        
+        pending_resp = supabase.table("claim_submissions").select("*").eq("human_status", "Pending Review").execute()
+        pending_claims = pending_resp.data
+        
+        if not pending_claims:
+            st.success("🎉 All clear! No pending claims requiring review.")
+        else:
+            st.caption(f"**{len(pending_claims)}** claims awaiting approval.")
+            
+            for claim in pending_claims:
+                with st.expander(f"📌 {claim['proposed_claim'][:60]}...", expanded=True):
+                    st.write(f"**Full Proposed Claim:** {claim['proposed_claim']}")
+                    st.write(f"**Target Tier:** `{claim['target_tier']}` | **Submitted By:** {claim['submitted_by']}")
+                    
+                    if claim.get("evidence_id"):
+                        try:
+                            ev_info = supabase.table("evidence").select("title").eq("id", claim["evidence_id"]).single().execute()
+                            if ev_info.data:
+                                st.write(f"**Linked Evidence Study:** 📄 {ev_info.data['title']}")
+                        except Exception:
+                            pass
+                    
+                    if claim.get("ai_evaluation"):
+                        st.info(f"**🤖 AI Pre-Check:** {claim['ai_evaluation']}")
+                        
+                    col_app, col_rej = st.columns(2)
+                    with col_app:
+                        if st.button("✅ Approve", key=f"app_{claim['id']}", use_container_width=True):
+                            # 1. Update review status
+                            supabase.table("claim_submissions").update({"human_status": "Approved"}).eq("id", claim['id']).execute()
+                            
+                            # 2. Promote into Master 'claims' Bank safely
+                            try:
+                                supabase
