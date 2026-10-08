@@ -194,7 +194,6 @@ elif st.session_state.user_role == "Legal & Compliance":
         
         # --- 2. VIEW CATALOG WITH SEARCH, VISUAL LINKS, AND SOFT DELETE ---
         try:
-            # Fetch records
             evidence_resp = supabase.table("evidence").select("*").order("created_at", desc=True).execute()
             evidence_data = evidence_resp.data
             
@@ -241,7 +240,7 @@ elif st.session_state.user_role == "Legal & Compliance":
                                 st.caption("🔗 *No claims currently tied to this study.*")
                         except Exception:
                             st.markdown("---")
-                            st.caption(f"⚠️ *Could not load linked claims. (Database check needed).*")
+                            st.caption("⚠️ *Could not load linked claims. (Database check needed).*")
                         
                         if study.get("study_content"):
                             st.markdown("---")
@@ -268,36 +267,54 @@ elif st.session_state.user_role == "Legal & Compliance":
     with tab_pipeline:
         st.subheader("⚖️ Pending Claims Review")
         
-        pending_resp = supabase.table("claim_submissions").select("*").eq("human_status", "Pending Review").execute()
-        pending_claims = pending_resp.data
-        
-        if not pending_claims:
-            st.success("🎉 All clear! No pending claims requiring review.")
-        else:
-            st.caption(f"**{len(pending_claims)}** claims awaiting approval.")
+        try:
+            pending_resp = supabase.table("claim_submissions").select("*").eq("human_status", "Pending Review").execute()
+            pending_claims = pending_resp.data
             
-            for claim in pending_claims:
-                with st.expander(f"📌 {claim['proposed_claim'][:60]}...", expanded=True):
-                    st.write(f"**Full Proposed Claim:** {claim['proposed_claim']}")
-                    st.write(f"**Target Tier:** `{claim['target_tier']}` | **Submitted By:** {claim['submitted_by']}")
-                    
-                    if claim.get("evidence_id"):
-                        try:
-                            ev_info = supabase.table("evidence").select("title").eq("id", claim["evidence_id"]).single().execute()
-                            if ev_info.data:
-                                st.write(f"**Linked Evidence Study:** 📄 {ev_info.data['title']}")
-                        except Exception:
-                            pass
-                    
-                    if claim.get("ai_evaluation"):
-                        st.info(f"**🤖 AI Pre-Check:** {claim['ai_evaluation']}")
+            if not pending_claims:
+                st.success("🎉 All clear! No pending claims requiring review.")
+            else:
+                st.caption(f"**{len(pending_claims)}** claims awaiting approval.")
+                
+                for claim in pending_claims:
+                    with st.expander(f"📌 {claim['proposed_claim'][:60]}...", expanded=True):
+                        st.write(f"**Full Proposed Claim:** {claim['proposed_claim']}")
+                        st.write(f"**Target Tier:** `{claim['target_tier']}` | **Submitted By:** {claim['submitted_by']}")
                         
-                    col_app, col_rej = st.columns(2)
-                    with col_app:
-                        if st.button("✅ Approve", key=f"app_{claim['id']}", use_container_width=True):
-                            # 1. Update review status
-                            supabase.table("claim_submissions").update({"human_status": "Approved"}).eq("id", claim['id']).execute()
-                            
-                            # 2. Promote into Master 'claims' Bank safely
+                        if claim.get("evidence_id"):
                             try:
-                                supabase
+                                ev_info = supabase.table("evidence").select("title").eq("id", claim["evidence_id"]).single().execute()
+                                if ev_info.data:
+                                    st.write(f"**Linked Evidence Study:** 📄 {ev_info.data['title']}")
+                            except Exception:
+                                pass
+                        
+                        if claim.get("ai_evaluation"):
+                            st.info(f"**🤖 AI Pre-Check:** {claim['ai_evaluation']}")
+                            
+                        col_app, col_rej = st.columns(2)
+                        with col_app:
+                            if st.button("✅ Approve", key=f"app_{claim['id']}", use_container_width=True):
+                                # 1. Update review status
+                                supabase.table("claim_submissions").update({"human_status": "Approved"}).eq("id", claim['id']).execute()
+                                
+                                # 2. Promote into Master 'claims' Bank safely
+                                try:
+                                    supabase.table("claims").insert({
+                                        "claim_text": claim['proposed_claim'],
+                                        "tier": claim['target_tier'],
+                                        "evidence_id": claim.get('evidence_id')
+                                    }).execute()
+                                except Exception:
+                                    pass
+                                    
+                                st.toast("Claim Approved & Published to Claims Bank!")
+                                st.rerun()
+                                
+                        with col_rej:
+                            if st.button("❌ Reject", key=f"rej_{claim['id']}", use_container_width=True):
+                                supabase.table("claim_submissions").update({"human_status": "Rejected"}).eq("id", claim['id']).execute()
+                                st.toast("Claim Rejected!")
+                                st.rerun()
+        except Exception as e:
+            st.error(f"Error fetching pending claims: {e}")
