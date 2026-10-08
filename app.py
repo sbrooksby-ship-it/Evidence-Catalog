@@ -3,7 +3,7 @@ from supabase import create_client
 
 # Page Config: Executive Wide Layout
 st.set_page_config(
-    page_title="Corporate Claims & Compliance Portal",
+    page_title="Evidence Catalog",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
