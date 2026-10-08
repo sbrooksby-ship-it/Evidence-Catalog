@@ -55,20 +55,19 @@ if not st.session_state.user:
                 auth_resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
                 st.session_state.user = auth_resp.user
                 
-                # Try to fetch role from a 'profiles' table, default to Legal for demo if none found
-                try:
-                    profile = supabase.table("profiles").select("role").eq("id", auth_resp.user.id).single().execute()
-                    st.session_state.user_role = profile.data.get("role", "Marketing")
-                except:
-                    # Fallback if you haven't created a profiles table yet
-                    st.session_state.user_role = "Legal & Compliance" if "legal" in email.lower() else "Marketing Team"
+                # Check email to assign role
+                user_email = auth_resp.user.email.lower() if auth_resp.user.email else ""
+                if "legal" in user_email:
+                    st.session_state.user_role = "Legal & Compliance"
+                else:
+                    st.session_state.user_role = "Marketing Team"
                 
                 st.rerun()
-                except Exception as e:
+            except Exception as e:
                 st.error(f"Login failed. Error details: {e}")
     
     st.warning("👈 Please log in using the sidebar to access the portal.")
-    st.stop() # Halts the app from rendering the rest until logged in
+    st.stop()
 
 # Logged-in Sidebar View
 sidebar.success(f"Logged in as:\n**{st.session_state.user.email}**")
@@ -110,10 +109,7 @@ with tab_evidence:
                     if not study_title or not uploaded_file:
                         st.warning("Please provide both a title and a document file.")
                     else:
-                        # Extract the text from the file
                         markdown_content = uploaded_file.getvalue().decode("utf-8")
-                        
-                        # Save straight to Postgres Database
                         supabase.table("evidence").insert({
                             "title": study_title,
                             "description": study_desc,
@@ -127,7 +123,6 @@ with tab_evidence:
     
     # 2. VIEW EVIDENCE CATALOG
     try:
-        # Fetching records including our new study_content column
         evidence_resp = supabase.table("evidence").select("id, title, description, study_content, status, created_at").execute()
         evidence_data = evidence_resp.data
         
@@ -138,7 +133,6 @@ with tab_evidence:
             
             st.divider()
             
-            # Display studies in expanders so users can read the Markdown natively
             for study in evidence_data:
                 with st.expander(f"📄 {study['title']} ({study['status']})"):
                     st.write(f"**Summary:** {study['description']}")
@@ -146,7 +140,6 @@ with tab_evidence:
                     
                     if study.get("study_content"):
                         st.markdown("---")
-                        # Renders the markdown cleanly right in the app
                         st.markdown(study["study_content"]) 
                     else:
                         st.info("No full document text attached to this record.")
@@ -179,8 +172,8 @@ with tab_pipeline:
                     else:
                         payload = {
                             "proposed_claim": proposed_claim,
-                            "target_tier": target_tier.split()[0], # Extracts "T2" or "T3"
-                            "submitted_by": st.session_state.user.email, # Auto-captures logged in user
+                            "target_tier": target_tier.split()[0],
+                            "submitted_by": st.session_state.user.email,
                             "human_status": "Pending Review"
                         }
                         supabase.table("claim_submissions").insert(payload).execute()
@@ -208,7 +201,6 @@ with tab_pipeline:
                         if claim.get("ai_evaluation"):
                             st.info(f"**🤖 AI Pre-Check:** {claim['ai_evaluation']}")
                             
-                        # Restricted Approval Actions
                         if st.session_state.user_role == "Legal & Compliance":
                             col_app, col_rej = st.columns(2)
                             with col_app:
