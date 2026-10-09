@@ -86,7 +86,6 @@ if st.session_state.user_role == "Marketing Team":
     st.caption("Enter proposed copy for Legal review against existing clinical evidence.")
     st.markdown("---")
     
-    # Fetch ONLY active evidence so marketing cannot link outdated studies
     evidence_options = {}
     try:
         ev_resp = supabase.table("evidence").select("id, title").eq("status", "Active").execute()
@@ -131,7 +130,6 @@ elif st.session_state.user_role == "Legal & Compliance":
     st.title("🛡️ Legal Compliance Dashboard")
     st.markdown("---")
 
-    # ADDED THIRD TAB FOR MASTER CLAIMS
     tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Claims Review Queue", "📋 Master Claims Bank"])
 
     # --------------------------------------------------------------------------
@@ -162,7 +160,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                         st.warning("Please provide both a title and a document file.")
                     else:
                         extracted_text = ""
-                        
                         if uploaded_file.name.lower().endswith(".pdf"):
                             try:
                                 pdf_reader = PyPDF2.PdfReader(uploaded_file)
@@ -214,7 +211,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                         st.write(f"**Summary:** {study.get('description', '')}")
                         
                         try:
-                            # Only fetch claims that are still officially "Approved" to show under the study
                             approved_claims = supabase.table("claims").select("*").eq("evidence_id", study['id']).eq("status", "Approved").execute()
                             pending_claims = supabase.table("claim_submissions").select("*").eq("evidence_id", study['id']).eq("human_status", "Pending Review").execute()
                             
@@ -322,6 +318,14 @@ elif st.session_state.user_role == "Legal & Compliance":
         claims_search = st.text_input("🔍 Search master claims...", "")
         
         try:
+            # 1. Fetch all evidence for mapping
+            evidence_dict = {"None": None}
+            ev_query = supabase.table("evidence").select("id, title").execute()
+            if ev_query.data:
+                for e in ev_query.data:
+                    evidence_dict[e['title']] = e['id']
+                    
+            # 2. Fetch all claims
             claims_resp = supabase.table("claims").select("*").execute()
             claims_data = claims_resp.data
             
@@ -340,12 +344,28 @@ elif st.session_state.user_role == "Legal & Compliance":
                         
                         updated_text = st.text_area("Edit Claim Text", value=c.get('claim_text', ''), key=f"text_{c['id']}")
                         
+                        # Match current evidence ID to its title
+                        current_ev_id = c.get('evidence_id')
+                        current_ev_title = "None"
+                        if current_ev_id:
+                            for title, eid in evidence_dict.items():
+                                if eid == current_ev_id:
+                                    current_ev_title = title
+                                    break
+                        
+                        # Provide dropdown to view/change the linked study
+                        new_ev_title = st.selectbox(
+                            "Linked Evidence Study", 
+                            list(evidence_dict.keys()), 
+                            index=list(evidence_dict.keys()).index(current_ev_title) if current_ev_title in evidence_dict else 0,
+                            key=f"ev_select_{c['id']}"
+                        )
+                        
                         col_tier, col_status = st.columns(2)
                         with col_tier:
                             tier_options = ["T1 (Primary)", "T2 (Substantiated)", "T3 (Qualified)"]
                             current_tier = c.get('tier', 'T3')
                             
-                            # Find the default index based on the current string
                             idx = 0
                             for i, opt in enumerate(tier_options):
                                 if current_tier[:2] in opt:
@@ -361,8 +381,9 @@ elif st.session_state.user_role == "Legal & Compliance":
                         if st.button("💾 Save Changes", key=f"save_claim_{c['id']}", type="primary"):
                             supabase.table("claims").update({
                                 "claim_text": updated_text,
-                                "tier": new_tier.split()[0], # Saves just 'T1', 'T2', or 'T3'
-                                "status": new_status
+                                "tier": new_tier.split()[0], 
+                                "status": new_status,
+                                "evidence_id": evidence_dict[new_ev_title] # Saves the new study link
                             }).eq("id", c['id']).execute()
                             
                             st.toast("Master Claim updated successfully!")
