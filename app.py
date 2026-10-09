@@ -106,16 +106,13 @@ def upload_evidence_modal():
                 extracted_text = ""
                 primary_pdf_b64 = None
                 
-                # FEATURE: Loading Spinner
                 with st.spinner("Extracting text and processing documents..."):
                     for i, file in enumerate(uploaded_files):
                         extracted_text += f"\n\n--- Appended File: {file.name} ---\n\n"
                         if file.name.lower().endswith(".pdf"):
                             file_bytes = file.getvalue()
-                            # FEATURE: Save first PDF as Base64 for the native viewer
                             if primary_pdf_b64 is None:
                                 primary_pdf_b64 = base64.b64encode(file_bytes).decode('utf-8')
-                            
                             try:
                                 pdf_reader = PyPDF2.PdfReader(file)
                                 for page in pdf_reader.pages:
@@ -142,27 +139,21 @@ def upload_evidence_modal():
 @st.dialog("📄 Original Document & Extracted Text", width="large")
 def view_study_modal(study_title, study_content, pdf_b64):
     st.subheader(study_title)
-    # FEATURE: Original PDF Viewer Integration
     if pdf_b64:
         tab_pdf, tab_text = st.tabs(["🖼️ Original PDF", "📝 Extracted AI Text"])
         with tab_pdf:
-            pdf_display = f'<iframe src="data:application/pdf;base64,{pdf_b64}" width="100%" height="700px" type="application/pdf"></iframe>'
-            st.markdown(pdf_display, unsafe_allow_html=True)
+            st.markdown(f'<iframe src="data:application/pdf;base64,{pdf_b64}" width="100%" height="700px" type="application/pdf"></iframe>', unsafe_allow_html=True)
         with tab_text:
             st.markdown(study_content)
     else:
-        if study_content:
-            st.markdown(study_content)
-        else:
-            st.info("No data available.")
+        if study_content: st.markdown(study_content)
+        else: st.info("No data available.")
 
 @st.dialog("✏️ Edit Master Claim")
 def edit_claim_modal(claim_data, evidence_dict):
     updated_text = st.text_area("Master Claim Copy", value=claim_data.get('claim_text', ''), height=120)
-    
     current_ev_id = claim_data.get('evidence_id')
     current_ev_title = next((t for t, eid in evidence_dict.items() if eid == current_ev_id), "None")
-                
     new_ev_title = st.selectbox("Linked Clinical Study", list(evidence_dict.keys()), index=list(evidence_dict.keys()).index(current_ev_title) if current_ev_title in evidence_dict else 0)
     
     col_t, col_s = st.columns(2)
@@ -179,7 +170,6 @@ def edit_claim_modal(claim_data, evidence_dict):
             "claim_text": updated_text, "tier": new_tier.split()[0], "status": new_status, "evidence_id": evidence_dict[new_ev_title]
         }).eq("id", claim_data['id']).execute()
         st.rerun()
-
 
 # ==============================================================================
 # MARKETING VIEW
@@ -235,7 +225,7 @@ elif st.session_state.user_role == "Legal & Compliance":
     tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Review Queue", "📋 Master Claims Registry"])
 
     # --------------------------------------------------------------------------
-    # TAB 1: EVIDENCE CATALOG
+    # TAB 1: EVIDENCE CATALOG (Now with Grid View!)
     # --------------------------------------------------------------------------
     with tab_evidence:
         ev_main, ev_side = st.columns([7, 3], gap="large")
@@ -244,6 +234,11 @@ elif st.session_state.user_role == "Legal & Compliance":
             if st.button("➕ Upload New Evidence", type="primary", use_container_width=True):
                 upload_evidence_modal()
             st.divider()
+            
+            # FEATURE: Grid vs Card toggle for Evidence
+            ev_view_mode = st.radio("Display Layout", ["Card View (Detail)", "Grid View (Analytics)"], horizontal=True, key="ev_view_toggle")
+            st.divider()
+            
             s_query = st.text_input("🔍 Search Studies")
             stat_filter = st.radio("Status", ["All", "Active Only", "Outdated Only"], horizontal=True)
             
@@ -255,24 +250,41 @@ elif st.session_state.user_role == "Legal & Compliance":
                 elif stat_filter == "Outdated Only": ev_data = [e for e in ev_data if e.get('status') == 'Outdated']
                 if s_query: ev_data = [e for e in ev_data if s_query.lower() in str(e).lower()]
                 
-                for study in ev_data:
-                    is_act = study.get('status') == 'Active'
-                    with st.expander(f"{'🟢' if is_act else '⚪'} {study.get('title', 'Untitled')}"):
-                        st.markdown(f"{render_badge(study.get('status', 'Active'), 'active' if is_act else 'outdated')} {render_badge(study.get('evidence_type', 'N/A'), 'outdated')}", unsafe_allow_html=True)
-                        st.write(f"**Findings:** {study.get('description', 'N/A')}")
-                        
-                        a1, a2, _ = st.columns([2, 2, 6])
-                        with a1:
-                            if st.button("📄 View Document", key=f"rd_{study['id']}", use_container_width=True):
-                                view_study_modal(study.get('title'), study.get('study_content'), study.get('primary_document_base64'))
-                        with a2:
-                            if is_act and st.button("🗄️ Mark Outdated", key=f"out_{study['id']}", type="secondary", use_container_width=True):
-                                supabase.table("evidence").update({"status": "Outdated"}).eq("id", study['id']).execute()
-                                st.rerun()
+                if not ev_data:
+                    st.info("No studies match your current filters.")
+                else:
+                    if ev_view_mode == "Grid View (Analytics)":
+                        # Display as Pandas DataFrame
+                        df_ev = pd.DataFrame(ev_data)
+                        df_ev = df_ev.rename(columns={
+                            'title': 'Study Title', 
+                            'evidence_type': 'Type', 
+                            'status': 'Status', 
+                            'added_by': 'Uploader', 
+                            'description': 'Summary'
+                        })
+                        display_cols = ['Study Title', 'Type', 'Status', 'Uploader', 'Summary']
+                        st.dataframe(df_ev[[c for c in display_cols if c in df_ev.columns]], use_container_width=True, hide_index=True)
+                    else:
+                        # Display as Cards
+                        for study in ev_data:
+                            is_act = study.get('status') == 'Active'
+                            with st.expander(f"{'🟢' if is_act else '⚪'} {study.get('title', 'Untitled')}"):
+                                st.markdown(f"{render_badge(study.get('status', 'Active'), 'active' if is_act else 'outdated')} {render_badge(study.get('evidence_type', 'N/A'), 'outdated')}", unsafe_allow_html=True)
+                                st.write(f"**Findings:** {study.get('description', 'N/A')}")
+                                
+                                a1, a2, _ = st.columns([2, 2, 6])
+                                with a1:
+                                    if st.button("📄 View Document", key=f"rd_{study['id']}", use_container_width=True):
+                                        view_study_modal(study.get('title'), study.get('study_content'), study.get('primary_document_base64'))
+                                with a2:
+                                    if is_act and st.button("🗄️ Mark Outdated", key=f"out_{study['id']}", type="secondary", use_container_width=True):
+                                        supabase.table("evidence").update({"status": "Outdated"}).eq("id", study['id']).execute()
+                                        st.rerun()
             except Exception as e: st.error(f"Error: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 2: REVIEW QUEUE (BULK ACTIONS)
+    # TAB 2: REVIEW QUEUE
     # --------------------------------------------------------------------------
     with tab_pipeline:
         st.markdown("### ⚖️ Pending Legal Review")
@@ -281,24 +293,17 @@ elif st.session_state.user_role == "Legal & Compliance":
             if not p_data:
                 st.success("🎉 Inbox Zero! All claim submissions have been reviewed.")
             else:
-                # FEATURE: Bulk Action Data Grid
                 st.caption("Check the box next to claims to approve or reject them in bulk.")
                 df_queue = pd.DataFrame(p_data)
-                df_queue.insert(0, "Select", False) # Add checkbox column
-                
-                # Map evidence names for readability
+                df_queue.insert(0, "Select", False)
                 ev_lookup = {e['id']: e['title'] for e in supabase.table("evidence").select("id, title").execute().data or []}
                 df_queue['Linked Study'] = df_queue['evidence_id'].map(ev_lookup).fillna("None")
                 
-                # Format for display
-                display_df = df_queue[['Select', 'proposed_claim', 'target_tier', 'submitted_by', 'Linked Study']]
-                
                 edited_queue = st.data_editor(
-                    display_df,
+                    df_queue[['Select', 'proposed_claim', 'target_tier', 'submitted_by', 'Linked Study']],
                     column_config={"Select": st.column_config.CheckboxColumn("Select", default=False)},
                     disabled=["proposed_claim", "target_tier", "submitted_by", "Linked Study"],
-                    use_container_width=True,
-                    hide_index=True
+                    use_container_width=True, hide_index=True
                 )
                 
                 selected_indices = edited_queue[edited_queue['Select']].index
@@ -320,18 +325,16 @@ elif st.session_state.user_role == "Legal & Compliance":
                                 supabase.table("claim_submissions").update({"human_status": "Rejected"}).eq("id", p_data[idx]['id']).execute()
                         st.success(f"{len(selected_indices)} claims rejected!")
                         st.rerun()
-        except Exception as e:
-            st.error(f"Error fetching queue: {e}")
+        except Exception as e: st.error(f"Error fetching queue: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 3: MASTER CLAIMS REGISTRY (GRID TOGGLE & GAP FLAGS)
+    # TAB 3: MASTER CLAIMS REGISTRY
     # --------------------------------------------------------------------------
     with tab_claims:
         mc_main, mc_side = st.columns([7, 3], gap="large")
         
         with mc_side:
             st.markdown("### 🎛️ Filters & Views")
-            # FEATURE: Grid vs Card Toggle
             view_mode = st.radio("Display Layout", ["Card View (Editable)", "Grid View (Analytics)"], horizontal=True)
             st.divider()
             c_search = st.text_input("🔍 Search copy...")
@@ -349,31 +352,23 @@ elif st.session_state.user_role == "Legal & Compliance":
                     
                 claims_data = supabase.table("claims").select("*").order("created_at", desc=True).execute().data or []
                 
-                # Filters
                 if t_filter != "All": claims_data = [c for c in claims_data if c.get('tier') == t_filter]
                 if c_search: claims_data = [c for c in claims_data if c_search.lower() in str(c.get('claim_text', '')).lower()]
 
                 if not claims_data:
                     st.info("No claims match filters.")
                 else:
-                    # LOGIC: Verification Gap Flags
                     def get_gap_flag(ev_id):
                         if not ev_id: return "⚠️ Orphaned (No Study)"
                         if ev_status_dict.get(ev_id) == "Outdated": return "🚨 Outdated Evidence"
                         return "✅ Verified"
 
                     if view_mode == "Grid View (Analytics)":
-                        # Display as Pandas DataFrame
                         df_claims = pd.DataFrame(claims_data)
                         df_claims['Study Link'] = df_claims['evidence_id'].map({v: k for k, v in ev_dict.items()}).fillna("None")
                         df_claims['Verification Status'] = df_claims['evidence_id'].apply(get_gap_flag)
-                        
-                        st.dataframe(
-                            df_claims[['claim_text', 'tier', 'status', 'Study Link', 'Verification Status']], 
-                            use_container_width=True, hide_index=True
-                        )
+                        st.dataframe(df_claims[['claim_text', 'tier', 'status', 'Study Link', 'Verification Status']], use_container_width=True, hide_index=True)
                     else:
-                        # Display as Cards
                         for c in claims_data:
                             stat, tier, ev_id = c.get('status', 'Approved'), c.get('tier', 'T3'), c.get('evidence_id')
                             gap_flag = get_gap_flag(ev_id)
@@ -388,5 +383,4 @@ elif st.session_state.user_role == "Legal & Compliance":
                                 with c2:
                                     if st.button("✏️ Edit", key=f"edit_{c['id']}", use_container_width=True):
                                         edit_claim_modal(c, ev_dict)
-            except Exception as e:
-                st.error(f"Error fetching registry: {e}")
+            except Exception as e: st.error(f"Error fetching registry: {e}")
