@@ -12,12 +12,86 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- ADVANCED UI POLISH (CSS) ---
 st.markdown("""
     <style>
-    .stApp { background-color: #f8fafc; }
-    div[data-testid="stMetric"] { background-color: #ffffff; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; }
+    /* Global App Background */
+    .stApp { 
+        background-color: #F8FAFC; 
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    
+    /* Clean SaaS Cards for Expanders */
+    div[data-testid="stExpander"] {
+        background-color: #FFFFFF;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+        border: 1px solid #E2E8F0 !important;
+        margin-bottom: 12px;
+    }
+    div[data-testid="stExpander"] > details > summary {
+        font-weight: 600;
+        font-size: 1.05rem;
+        color: #0F172A;
+        padding: 12px 15px;
+    }
+    
+    /* Primary Button Styling */
+    div[data-testid="stButton"] button[kind="primary"] {
+        background-color: #2563EB;
+        color: white;
+        border-radius: 6px;
+        font-weight: 600;
+        border: none;
+        padding: 0.5rem 1rem;
+        transition: all 0.2s;
+    }
+    div[data-testid="stButton"] button[kind="primary"]:hover {
+        background-color: #1D4ED8;
+    }
+    
+    /* Secondary Button Styling */
+    div[data-testid="stButton"] button[kind="secondary"] {
+        border-radius: 6px;
+        border: 1px solid #CBD5E1;
+        background-color: #FFFFFF;
+        color: #334155;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    div[data-testid="stButton"] button[kind="secondary"]:hover {
+        background-color: #F1F5F9;
+        border-color: #94A3B8;
+    }
+    
+    /* Inputs */
+    .stTextInput input, .stTextArea textarea, .stSelectbox > div > div {
+        border-radius: 6px;
+        border: 1px solid #CBD5E1;
+    }
+    
+    /* Custom Badge Classes */
+    .c-badge {
+        display: inline-block;
+        padding: 0.25em 0.75em;
+        font-size: 0.85em;
+        font-weight: 600;
+        border-radius: 9999px;
+        margin-right: 0.5em;
+        margin-bottom: 0.5em;
+    }
+    .badge-active { background-color: #DCFCE7; color: #166534; border: 1px solid #BBF7D0; }
+    .badge-outdated { background-color: #F1F5F9; color: #475569; border: 1px solid #E2E8F0; }
+    .badge-t1 { background-color: #DBEAFE; color: #1E40AF; border: 1px solid #BFDBFE; }
+    .badge-t2 { background-color: #FEF3C7; color: #92400E; border: 1px solid #FDE68A; }
+    .badge-t3 { background-color: #FCE7F3; color: #9D174D; border: 1px solid #FBCFE8; }
+    .badge-pending { background-color: #FEF9C3; color: #854D0E; border: 1px solid #FEF08A; }
     </style>
 """, unsafe_allow_html=True)
+
+# Helper function to render badges
+def render_badge(text, badge_type):
+    return f'<span class="c-badge badge-{badge_type}">{text}</span>'
 
 # ==========================================
 # DATABASE CONNECTION
@@ -39,16 +113,17 @@ if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
 sidebar = st.sidebar
-sidebar.image("https://img.icons8.com/color/96/shield.png", width=60)
-sidebar.title("Compliance Hub")
-sidebar.markdown("---")
+with sidebar:
+    st.image("https://img.icons8.com/color/96/shield.png", width=50)
+    st.title("Compliance Hub")
+    st.markdown("---")
 
 if not st.session_state.user:
     with sidebar.form("login_form"):
-        st.subheader("🔒 User Login")
-        email = st.text_input("Email")
+        st.subheader("🔒 Sign In")
+        email = st.text_input("Email", placeholder="name@company.com")
         password = st.text_input("Password", type="password")
-        login_btn = st.form_submit_button("Log In")
+        login_btn = st.form_submit_button("Log In", use_container_width=True)
         
         if login_btn:
             try:
@@ -63,29 +138,32 @@ if not st.session_state.user:
                 
                 st.rerun()
             except Exception as e:
-                st.error(f"Login failed. Error details: {e}")
+                st.error("Invalid credentials. Please try again.")
     
-    st.warning("👈 Please log in using the sidebar to access the portal.")
+    st.info("👈 Please log in securely via the sidebar menu.")
     st.stop()
 
 # Logged-in Sidebar Navigation
-sidebar.success(f"Logged in as:\n**{st.session_state.user.email}**")
-sidebar.caption(f"Role: **{st.session_state.user_role}**")
-if sidebar.button("Log Out", use_container_width=True):
-    supabase.auth.sign_out()
-    st.session_state.user = None
-    st.session_state.user_role = None
-    st.rerun()
+with sidebar:
+    st.success(f"**User:** {st.session_state.user.email}")
+    st.caption(f"**Role:** {st.session_state.user_role}")
+    st.markdown("###")
+    if st.button("Log Out", use_container_width=True):
+        supabase.auth.sign_out()
+        st.session_state.user = None
+        st.session_state.user_role = None
+        st.rerun()
 
 
 # ==============================================================================
 # MARKETING VIEW (Restricted to Claims Submissions)
 # ==============================================================================
 if st.session_state.user_role == "Marketing Team":
-    st.title("📝 Submit New Marketing Claim")
-    st.caption("Enter proposed copy for Legal review against existing clinical evidence.")
+    st.title("🚀 Marketing Submission Portal")
+    st.markdown("Submit new marketing copy and claims for rigorous legal review.")
     st.markdown("---")
     
+    # Fetch active evidence
     evidence_options = {}
     try:
         ev_resp = supabase.table("evidence").select("id, title").eq("status", "Active").execute()
@@ -95,20 +173,22 @@ if st.session_state.user_role == "Marketing Team":
         pass
 
     with st.container(border=True):
+        st.subheader("📝 Draft a New Claim")
         with st.form("marketing_claim_form", clear_on_submit=True):
-            proposed_claim = st.text_area("Proposed Claim Copy", placeholder="e.g., Proven to increase digestive health within 14 days.")
+            proposed_claim = st.text_area("Proposed Claim Copy", placeholder="e.g., Proven to increase digestive health within 14 days...", height=120)
             
             col_tier, col_study = st.columns(2)
             with col_tier:
                 target_tier = st.selectbox("Target Claim Tier", ["T2 (Substantiated)", "T3 (Qualified)"])
             with col_study:
-                selected_study_title = st.selectbox("Link Supporting Evidence Study (Optional)", ["None"] + list(evidence_options.keys()))
+                selected_study_title = st.selectbox("Link Supporting Clinical Study (Optional)", ["None"] + list(evidence_options.keys()))
             
-            submit_btn = st.form_submit_button("Submit for Legal Review", type="primary", use_container_width=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_btn = st.form_submit_button("Submit to Legal Queue", type="primary", use_container_width=True)
             
             if submit_btn:
                 if not proposed_claim:
-                    st.warning("Please enter a proposed claim.")
+                    st.warning("Please enter proposed claim text.")
                 else:
                     linked_evidence_id = evidence_options.get(selected_study_title) if selected_study_title != "None" else None
                     payload = {
@@ -119,7 +199,7 @@ if st.session_state.user_role == "Marketing Team":
                         "evidence_id": linked_evidence_id
                     }
                     supabase.table("claim_submissions").insert(payload).execute()
-                    st.success("Claim submitted successfully to the Legal Queue!")
+                    st.success("✅ Claim submitted successfully! Legal has been notified.")
                     st.rerun()
 
 
@@ -127,48 +207,47 @@ if st.session_state.user_role == "Marketing Team":
 # LEGAL & COMPLIANCE VIEW (Full Dashboard Access)
 # ==============================================================================
 elif st.session_state.user_role == "Legal & Compliance":
-    st.title("🛡️ Legal Compliance Dashboard")
+    st.title("🛡️ Compliance Control Center")
+    st.markdown("Manage clinical evidence, approve marketing claims, and audit master records.")
     st.markdown("---")
 
-    tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Claims Review Queue", "📋 Master Claims Bank"])
+    tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Review Queue", "📋 Master Claims"])
 
     # --------------------------------------------------------------------------
     # TAB 1: EVIDENCE CATALOG
     # --------------------------------------------------------------------------
     with tab_evidence:
-        st.subheader("Clinical Evidence & Studies")
+        col_search, col_upload = st.columns([3, 1])
+        with col_search:
+            search_query = st.text_input("🔍 Search catalog by keyword, title, or findings...", placeholder="Search...")
         
-        search_query = st.text_input("🔍 Search evidence by keyword, title, or description...", "")
-        
-        with st.expander("➕ Upload New Clinical Study (PDF, MD, or Text)", expanded=False):
+        with st.expander("➕ Upload New Study Document", expanded=False):
             with st.form("add_study_form", clear_on_submit=True):
                 study_title = st.text_input("Study Title", placeholder="e.g., Clinical Trial #305 - Gut Motility")
-                
                 col_type, col_added = st.columns(2)
                 with col_type:
                     evidence_type = st.selectbox("Evidence Type", ["Clinical Trial", "Literature Review", "Lab Assay", "Other"])
                 with col_added:
-                    added_by = st.text_input("Added By", value=st.session_state.user.email)
+                    added_by = st.text_input("Uploader", value=st.session_state.user.email, disabled=True)
                     
-                study_desc = st.text_area("Findings / Description Summary")
-                uploaded_file = st.file_uploader("Upload Study Document", type=["pdf", "md", "txt"])
+                study_desc = st.text_area("Executive Summary / Findings")
+                uploaded_file = st.file_uploader("Upload Source Document", type=["pdf", "md", "txt"])
                 
-                save_study = st.form_submit_button("Publish to Catalog", type="primary")
+                save_study = st.form_submit_button("Extract & Publish", type="primary")
                 
                 if save_study:
                     if not study_title or not uploaded_file:
-                        st.warning("Please provide both a title and a document file.")
+                        st.warning("Title and Document File are required.")
                     else:
                         extracted_text = ""
                         if uploaded_file.name.lower().endswith(".pdf"):
                             try:
                                 pdf_reader = PyPDF2.PdfReader(uploaded_file)
                                 for page in pdf_reader.pages:
-                                    extracted_page = page.extract_text()
-                                    if extracted_page:
-                                        extracted_text += extracted_page + "\n\n"
+                                    ext = page.extract_text()
+                                    if ext: extracted_text += ext + "\n\n"
                             except Exception as e:
-                                st.error(f"Failed to extract PDF text: {e}")
+                                st.error(f"Failed to parse PDF: {e}")
                         else:
                             extracted_text = uploaded_file.getvalue().decode("utf-8")
                         
@@ -176,15 +255,15 @@ elif st.session_state.user_role == "Legal & Compliance":
                             supabase.table("evidence").insert({
                                 "title": study_title,
                                 "evidence_type": evidence_type,
-                                "added_by": added_by,
+                                "added_by": st.session_state.user.email,
                                 "description": study_desc,
                                 "study_content": extracted_text,
                                 "status": "Active"
                             }).execute()
-                            st.success("Study parsed and published to database!")
+                            st.success("Study processed and added to catalog!")
                             st.rerun()
                             
-        st.markdown("###")
+        st.divider()
         
         try:
             evidence_resp = supabase.table("evidence").select("*").order("created_at", desc=True).execute()
@@ -193,22 +272,24 @@ elif st.session_state.user_role == "Legal & Compliance":
             if evidence_data:
                 if search_query:
                     q = search_query.lower()
-                    evidence_data = [
-                        e for e in evidence_data 
-                        if q in str(e.get('title', '')).lower() 
-                        or q in str(e.get('description', '')).lower()
-                    ]
+                    evidence_data = [e for e in evidence_data if q in str(e.get('title', '')).lower() or q in str(e.get('description', '')).lower()]
                 
                 st.caption(f"Showing **{len(evidence_data)}** clinical evidence records.")
-                st.divider()
                 
                 for study in evidence_data:
-                    with st.expander(f"📄 {study.get('title', 'Untitled Study')} ({study.get('status', 'Active')})"):
-                        col1, col2 = st.columns(2)
-                        col1.write(f"**Type:** {study.get('evidence_type', 'N/A')}")
-                        col2.write(f"**Added By:** {study.get('added_by', 'N/A')}")
+                    status_icon = "🟢" if study.get('status') == 'Active' else "⚪"
+                    with st.expander(f"{status_icon} {study.get('title', 'Untitled Study')}"):
                         
-                        st.write(f"**Summary:** {study.get('description', '')}")
+                        # UI Polished Badges
+                        stat_class = "active" if study.get('status') == 'Active' else "outdated"
+                        badges_html = f"""
+                            {render_badge(study.get('status', 'Active').upper(), stat_class)}
+                            {render_badge(study.get('evidence_type', 'N/A'), 'outdated')}
+                        """
+                        st.markdown(badges_html, unsafe_allow_html=True)
+                        st.caption(f"**Uploader:** {study.get('added_by', 'N/A')}")
+                        
+                        st.write(f"**Summary:** {study.get('description', 'No summary provided.')}")
                         
                         try:
                             approved_claims = supabase.table("claims").select("*").eq("evidence_id", study['id']).eq("status", "Approved").execute()
@@ -216,77 +297,76 @@ elif st.session_state.user_role == "Legal & Compliance":
                             
                             if approved_claims.data or pending_claims.data:
                                 st.markdown("---")
-                                st.write("🔗 **Tied Claims:**")
+                                st.markdown("##### 🔗 Linked Claims")
                                 
                                 for c in approved_claims.data:
-                                    tier = c.get('tier') or c.get('target_tier') or 'Claim'
-                                    claim_text = c.get('claim_text') or c.get('claim') or c.get('proposed_claim', '')
-                                    st.caption(f"✅ **[{tier}] Approved Master Claim:** {claim_text}")
+                                    tier = str(c.get('tier', 'T3')).lower().replace(" ", "")
+                                    t_class = tier if tier in ['t1', 't2', 't3'] else 'active'
+                                    st.markdown(f"{render_badge(c.get('tier', 'T3'), t_class)} {c.get('claim_text', '')}", unsafe_allow_html=True)
                                     
                                 for pc in pending_claims.data:
-                                    tier = pc.get('target_tier', 'Claim')
-                                    st.caption(f"⏳ **[{tier}] Pending Review Submission:** {pc.get('proposed_claim', '')}")
+                                    st.markdown(f"{render_badge('PENDING REVIEW', 'pending')} {pc.get('proposed_claim', '')}", unsafe_allow_html=True)
                             else:
                                 st.markdown("---")
-                                st.caption("🔗 *No claims currently tied to this study.*")
+                                st.caption("*No marketing claims currently linked.*")
                         except Exception:
-                            st.markdown("---")
-                            st.caption("⚠️ *Could not load linked claims. (Database check needed).*")
+                            st.caption("⚠️ *Database linking error.*")
                         
                         if study.get("study_content"):
                             st.markdown("---")
-                            st.markdown(study["study_content"])
+                            st.markdown("##### 📄 Extracted Content")
+                            with st.container(height=250):
+                                st.markdown(study["study_content"])
                             
                         if study.get('status') == 'Active':
-                            st.markdown("---")
-                            col_space, col_del = st.columns([4, 1])
-                            with col_del:
-                                if st.button("🗄️ Mark as Outdated", key=f"outdate_{study['id']}", type="secondary", use_container_width=True):
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            col1, col2, col_btn = st.columns([2,2,1])
+                            with col_btn:
+                                if st.button("🗄️ Mark Outdated", key=f"outdate_{study['id']}", use_container_width=True):
                                     supabase.table("evidence").update({"status": "Outdated"}).eq("id", study['id']).execute()
-                                    st.toast("Study filed as Outdated!")
                                     st.rerun()
                                     
             else:
-                st.info("No clinical evidence records found.")
+                st.info("Your evidence catalog is empty.")
         except Exception as e:
-            st.error(f"Error fetching evidence data: {e}")
+            st.error(f"Error loading evidence: {e}")
 
     # --------------------------------------------------------------------------
     # TAB 2: CLAIMS REVIEW QUEUE
     # --------------------------------------------------------------------------
     with tab_pipeline:
-        st.subheader("⚖️ Pending Claims Review")
-        
         try:
-            pending_resp = supabase.table("claim_submissions").select("*").eq("human_status", "Pending Review").execute()
+            pending_resp = supabase.table("claim_submissions").select("*").eq("human_status", "Pending Review").order("created_at", desc=False).execute()
             pending_claims = pending_resp.data
             
             if not pending_claims:
-                st.success("🎉 All clear! No pending claims requiring review.")
+                st.success("🎉 Inbox Zero! No claims currently await review.")
             else:
-                st.caption(f"**{len(pending_claims)}** claims awaiting approval.")
+                st.caption(f"**{len(pending_claims)}** claims awaiting legal approval.")
+                st.markdown("###")
                 
                 for claim in pending_claims:
-                    with st.expander(f"📌 {claim['proposed_claim'][:60]}...", expanded=True):
-                        st.write(f"**Full Proposed Claim:** {claim['proposed_claim']}")
-                        st.write(f"**Target Tier:** `{claim['target_tier']}` | **Submitted By:** {claim['submitted_by']}")
+                    with st.expander(f"⏳ Pending: {claim['proposed_claim'][:50]}...", expanded=True):
+                        
+                        tier = claim.get('target_tier', 'T3')
+                        t_class = tier.lower() if tier.lower() in ['t1', 't2', 't3'] else 'pending'
+                        
+                        st.markdown(f"##### Proposed Claim\n> {claim['proposed_claim']}")
+                        st.markdown(f"{render_badge('TARGET: ' + tier, t_class)} **Author:** {claim['submitted_by']}", unsafe_allow_html=True)
                         
                         if claim.get("evidence_id"):
                             try:
                                 ev_info = supabase.table("evidence").select("title").eq("id", claim["evidence_id"]).single().execute()
                                 if ev_info.data:
-                                    st.write(f"**Linked Evidence Study:** 📄 {ev_info.data['title']}")
+                                    st.markdown(f"**Supporting Study:** 📄 `{ev_info.data['title']}`")
                             except Exception:
                                 pass
                         
-                        if claim.get("ai_evaluation"):
-                            st.info(f"**🤖 AI Pre-Check:** {claim['ai_evaluation']}")
-                            
-                        col_app, col_rej = st.columns(2)
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        col_app, col_rej, _ = st.columns([1, 1, 2])
                         with col_app:
-                            if st.button("✅ Approve", key=f"app_{claim['id']}", use_container_width=True):
+                            if st.button("✅ Approve", key=f"app_{claim['id']}", type="primary", use_container_width=True):
                                 supabase.table("claim_submissions").update({"human_status": "Approved"}).eq("id", claim['id']).execute()
-                                
                                 try:
                                     supabase.table("claims").insert({
                                         "claim_text": claim['proposed_claim'],
@@ -296,41 +376,36 @@ elif st.session_state.user_role == "Legal & Compliance":
                                     }).execute()
                                 except Exception:
                                     pass
-                                    
-                                st.toast("Claim Approved & Published to Claims Bank!")
                                 st.rerun()
                                 
                         with col_rej:
-                            if st.button("❌ Reject", key=f"rej_{claim['id']}", use_container_width=True):
+                            if st.button("❌ Reject", key=f"rej_{claim['id']}", type="secondary", use_container_width=True):
                                 supabase.table("claim_submissions").update({"human_status": "Rejected"}).eq("id", claim['id']).execute()
-                                st.toast("Claim Rejected!")
                                 st.rerun()
         except Exception as e:
-            st.error(f"Error fetching pending claims: {e}")
+            st.error(f"Error fetching queue: {e}")
 
     # --------------------------------------------------------------------------
     # TAB 3: MASTER CLAIMS BANK
     # --------------------------------------------------------------------------
     with tab_claims:
-        st.subheader("📋 Master Claims Bank")
-        st.caption("Manage fully approved claims, update their tiers, or revoke them.")
-        
-        claims_search = st.text_input("🔍 Search master claims...", "")
+        col_c_search, _ = st.columns([2, 1])
+        with col_c_search:
+            claims_search = st.text_input("🔍 Search active master claims...", placeholder="Search...")
+        st.divider()
         
         try:
-            # 1. Fetch all evidence for mapping
             evidence_dict = {"None": None}
             ev_query = supabase.table("evidence").select("id, title").execute()
             if ev_query.data:
                 for e in ev_query.data:
                     evidence_dict[e['title']] = e['id']
                     
-            # 2. Fetch all claims
-            claims_resp = supabase.table("claims").select("*").execute()
+            claims_resp = supabase.table("claims").select("*").order("created_at", desc=True).execute()
             claims_data = claims_resp.data
             
             if not claims_data:
-                st.info("No claims found in the Master Bank.")
+                st.info("No claims established in the Master Bank.")
             else:
                 if claims_search:
                     q = claims_search.lower()
@@ -338,13 +413,13 @@ elif st.session_state.user_role == "Legal & Compliance":
                 
                 for c in claims_data:
                     current_status = c.get('status', 'Approved')
-                    status_icon = "✅" if current_status == "Approved" else "🚫"
+                    icon = "✅" if current_status == "Approved" else "🚫"
                     
-                    with st.expander(f"{status_icon} [{c.get('tier', 'Tier')}] {c.get('claim_text', 'Untitled')[:60]}..."):
+                    with st.expander(f"{icon} [{c.get('tier', 'T3')}] {c.get('claim_text', 'Untitled')[:60]}..."):
                         
-                        updated_text = st.text_area("Edit Claim Text", value=c.get('claim_text', ''), key=f"text_{c['id']}")
+                        st.markdown("##### Edit Claim Details")
+                        updated_text = st.text_area("Master Claim Copy", value=c.get('claim_text', ''), key=f"text_{c['id']}", height=80)
                         
-                        # Match current evidence ID to its title
                         current_ev_id = c.get('evidence_id')
                         current_ev_title = "None"
                         if current_ev_id:
@@ -353,9 +428,8 @@ elif st.session_state.user_role == "Legal & Compliance":
                                     current_ev_title = title
                                     break
                         
-                        # Provide dropdown to view/change the linked study
                         new_ev_title = st.selectbox(
-                            "Linked Evidence Study", 
+                            "Supporting Evidence Link", 
                             list(evidence_dict.keys()), 
                             index=list(evidence_dict.keys()).index(current_ev_title) if current_ev_title in evidence_dict else 0,
                             key=f"ev_select_{c['id']}"
@@ -365,28 +439,26 @@ elif st.session_state.user_role == "Legal & Compliance":
                         with col_tier:
                             tier_options = ["T1 (Primary)", "T2 (Substantiated)", "T3 (Qualified)"]
                             current_tier = c.get('tier', 'T3')
-                            
                             idx = 0
                             for i, opt in enumerate(tier_options):
-                                if current_tier[:2] in opt:
-                                    idx = i
-                                    
-                            new_tier = st.selectbox("Claim Tier", tier_options, index=idx, key=f"tier_{c['id']}")
+                                if current_tier[:2] in opt: idx = i
+                            new_tier = st.selectbox("Regulatory Tier", tier_options, index=idx, key=f"tier_{c['id']}")
                             
                         with col_status:
                             status_options = ["Approved", "Revoked"]
                             s_idx = 0 if current_status == "Approved" else 1
-                            new_status = st.selectbox("Status", status_options, index=s_idx, key=f"status_{c['id']}")
+                            new_status = st.selectbox("Compliance Status", status_options, index=s_idx, key=f"status_{c['id']}")
                             
-                        if st.button("💾 Save Changes", key=f"save_claim_{c['id']}", type="primary"):
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("💾 Commit Changes", key=f"save_claim_{c['id']}", type="primary"):
                             supabase.table("claims").update({
                                 "claim_text": updated_text,
                                 "tier": new_tier.split()[0], 
                                 "status": new_status,
-                                "evidence_id": evidence_dict[new_ev_title] # Saves the new study link
+                                "evidence_id": evidence_dict[new_ev_title]
                             }).eq("id", c['id']).execute()
                             
-                            st.toast("Master Claim updated successfully!")
+                            st.toast("Claim updated securely!")
                             st.rerun()
                             
         except Exception as e:
