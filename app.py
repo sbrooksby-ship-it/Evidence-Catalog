@@ -131,7 +131,8 @@ elif st.session_state.user_role == "Legal & Compliance":
     st.title("🛡️ Legal Compliance Dashboard")
     st.markdown("---")
 
-    tab_evidence, tab_pipeline = st.tabs(["🔬 Evidence Catalog", "⚖️ Claims Review Queue"])
+    # ADDED THIRD TAB FOR MASTER CLAIMS
+    tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Claims Review Queue", "📋 Master Claims Bank"])
 
     # --------------------------------------------------------------------------
     # TAB 1: EVIDENCE CATALOG
@@ -139,10 +140,8 @@ elif st.session_state.user_role == "Legal & Compliance":
     with tab_evidence:
         st.subheader("Clinical Evidence & Studies")
         
-        # 🔍 Keyword Search Bar
         search_query = st.text_input("🔍 Search evidence by keyword, title, or description...", "")
         
-        # --- 1. LEGAL UPLOAD FORM ---
         with st.expander("➕ Upload New Clinical Study (PDF, MD, or Text)", expanded=False):
             with st.form("add_study_form", clear_on_submit=True):
                 study_title = st.text_input("Study Title", placeholder="e.g., Clinical Trial #305 - Gut Motility")
@@ -164,7 +163,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                     else:
                         extracted_text = ""
                         
-                        # Handle PDF Extraction
                         if uploaded_file.name.lower().endswith(".pdf"):
                             try:
                                 pdf_reader = PyPDF2.PdfReader(uploaded_file)
@@ -174,7 +172,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                                         extracted_text += extracted_page + "\n\n"
                             except Exception as e:
                                 st.error(f"Failed to extract PDF text: {e}")
-                        # Handle standard Text / Markdown files
                         else:
                             extracted_text = uploaded_file.getvalue().decode("utf-8")
                         
@@ -192,13 +189,11 @@ elif st.session_state.user_role == "Legal & Compliance":
                             
         st.markdown("###")
         
-        # --- 2. VIEW CATALOG WITH SEARCH, VISUAL LINKS, AND SOFT DELETE ---
         try:
             evidence_resp = supabase.table("evidence").select("*").order("created_at", desc=True).execute()
             evidence_data = evidence_resp.data
             
             if evidence_data:
-                # Filter by search query
                 if search_query:
                     q = search_query.lower()
                     evidence_data = [
@@ -218,9 +213,9 @@ elif st.session_state.user_role == "Legal & Compliance":
                         
                         st.write(f"**Summary:** {study.get('description', '')}")
                         
-                        # 🔗 SAFELY Fetch Linked Claims (Won't crash if database structure is mismatched)
                         try:
-                            approved_claims = supabase.table("claims").select("*").eq("evidence_id", study['id']).execute()
+                            # Only fetch claims that are still officially "Approved" to show under the study
+                            approved_claims = supabase.table("claims").select("*").eq("evidence_id", study['id']).eq("status", "Approved").execute()
                             pending_claims = supabase.table("claim_submissions").select("*").eq("evidence_id", study['id']).eq("human_status", "Pending Review").execute()
                             
                             if approved_claims.data or pending_claims.data:
@@ -246,7 +241,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                             st.markdown("---")
                             st.markdown(study["study_content"])
                             
-                        # 🗄️ Soft Delete / Archive Button
                         if study.get('status') == 'Active':
                             st.markdown("---")
                             col_space, col_del = st.columns([4, 1])
@@ -295,15 +289,14 @@ elif st.session_state.user_role == "Legal & Compliance":
                         col_app, col_rej = st.columns(2)
                         with col_app:
                             if st.button("✅ Approve", key=f"app_{claim['id']}", use_container_width=True):
-                                # 1. Update review status
                                 supabase.table("claim_submissions").update({"human_status": "Approved"}).eq("id", claim['id']).execute()
                                 
-                                # 2. Promote into Master 'claims' Bank safely
                                 try:
                                     supabase.table("claims").insert({
                                         "claim_text": claim['proposed_claim'],
                                         "tier": claim['target_tier'],
-                                        "evidence_id": claim.get('evidence_id')
+                                        "evidence_id": claim.get('evidence_id'),
+                                        "status": "Approved"
                                     }).execute()
                                 except Exception:
                                     pass
@@ -318,3 +311,62 @@ elif st.session_state.user_role == "Legal & Compliance":
                                 st.rerun()
         except Exception as e:
             st.error(f"Error fetching pending claims: {e}")
+
+    # --------------------------------------------------------------------------
+    # TAB 3: MASTER CLAIMS BANK
+    # --------------------------------------------------------------------------
+    with tab_claims:
+        st.subheader("📋 Master Claims Bank")
+        st.caption("Manage fully approved claims, update their tiers, or revoke them.")
+        
+        claims_search = st.text_input("🔍 Search master claims...", "")
+        
+        try:
+            claims_resp = supabase.table("claims").select("*").execute()
+            claims_data = claims_resp.data
+            
+            if not claims_data:
+                st.info("No claims found in the Master Bank.")
+            else:
+                if claims_search:
+                    q = claims_search.lower()
+                    claims_data = [c for c in claims_data if q in str(c.get('claim_text', '')).lower()]
+                
+                for c in claims_data:
+                    current_status = c.get('status', 'Approved')
+                    status_icon = "✅" if current_status == "Approved" else "🚫"
+                    
+                    with st.expander(f"{status_icon} [{c.get('tier', 'Tier')}] {c.get('claim_text', 'Untitled')[:60]}..."):
+                        
+                        updated_text = st.text_area("Edit Claim Text", value=c.get('claim_text', ''), key=f"text_{c['id']}")
+                        
+                        col_tier, col_status = st.columns(2)
+                        with col_tier:
+                            tier_options = ["T1 (Primary)", "T2 (Substantiated)", "T3 (Qualified)"]
+                            current_tier = c.get('tier', 'T3')
+                            
+                            # Find the default index based on the current string
+                            idx = 0
+                            for i, opt in enumerate(tier_options):
+                                if current_tier[:2] in opt:
+                                    idx = i
+                                    
+                            new_tier = st.selectbox("Claim Tier", tier_options, index=idx, key=f"tier_{c['id']}")
+                            
+                        with col_status:
+                            status_options = ["Approved", "Revoked"]
+                            s_idx = 0 if current_status == "Approved" else 1
+                            new_status = st.selectbox("Status", status_options, index=s_idx, key=f"status_{c['id']}")
+                            
+                        if st.button("💾 Save Changes", key=f"save_claim_{c['id']}", type="primary"):
+                            supabase.table("claims").update({
+                                "claim_text": updated_text,
+                                "tier": new_tier.split()[0], # Saves just 'T1', 'T2', or 'T3'
+                                "status": new_status
+                            }).eq("id", c['id']).execute()
+                            
+                            st.toast("Master Claim updated successfully!")
+                            st.rerun()
+                            
+        except Exception as e:
+            st.error(f"Error fetching claims bank: {e}")
