@@ -145,30 +145,35 @@ with sidebar:
 # ==========================================
 @st.dialog("➕ Upload New Clinical Document", width="large")
 def upload_evidence_modal():
-    st.caption("Extract text from PDFs or Markdown files directly into the catalog.")
+    st.caption("Upload one or more PDFs or Markdown files to stitch together into a single evidence record.")
     with st.form("add_study_form", clear_on_submit=True):
         study_title = st.text_input("Study Title", placeholder="e.g., Clinical Trial #402")
         evidence_type = st.selectbox("Type", ["Clinical Trial", "Literature Review", "Lab Assay", "Other"])
         study_desc = st.text_area("Findings Summary", height=100)
-        uploaded_file = st.file_uploader("Source File", type=["pdf", "md", "txt"])
+        
+        # CHANGED: Added accept_multiple_files=True
+        uploaded_files = st.file_uploader("Source Files", type=["pdf", "md", "txt"], accept_multiple_files=True)
         
         if st.form_submit_button("Extract & Publish", type="primary", use_container_width=True):
-            if not study_title or not uploaded_file:
-                st.warning("Title and file are required.")
+            if not study_title or not uploaded_files:
+                st.warning("Title and at least one file are required.")
             else:
                 extracted_text = ""
-                if uploaded_file.name.lower().endswith(".pdf"):
-                    try:
-                        pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                        for page in pdf_reader.pages:
-                            txt = page.extract_text()
-                            if txt: extracted_text += txt + "\n\n"
-                    except Exception as e:
-                        st.error(f"PDF error: {e}")
-                else:
-                    extracted_text = uploaded_file.getvalue().decode("utf-8")
+                # CHANGED: Loop through all uploaded files and append them together
+                for uploaded_file in uploaded_files:
+                    extracted_text += f"\n\n--- Appended File: {uploaded_file.name} ---\n\n"
+                    if uploaded_file.name.lower().endswith(".pdf"):
+                        try:
+                            pdf_reader = PyPDF2.PdfReader(uploaded_file)
+                            for page in pdf_reader.pages:
+                                txt = page.extract_text()
+                                if txt: extracted_text += txt + "\n\n"
+                        except Exception as e:
+                            st.error(f"PDF error on {uploaded_file.name}: {e}")
+                    else:
+                        extracted_text += uploaded_file.getvalue().decode("utf-8")
                 
-                if extracted_text:
+                if extracted_text.strip():
                     supabase.table("evidence").insert({
                         "title": study_title,
                         "evidence_type": evidence_type,
@@ -179,6 +184,36 @@ def upload_evidence_modal():
                     }).execute()
                     st.success("Study published!")
                     st.rerun()
+
+# NEW FEATURE: Retroactive Document Appending Modal
+@st.dialog("📎 Append Documents to Existing Study")
+def append_document_modal(study_id, current_content):
+    st.caption("Upload additional files to append to this study's existing extracted text.")
+    new_files = st.file_uploader("Additional Source Files", type=["pdf", "md", "txt"], accept_multiple_files=True)
+    
+    if st.button("Extract & Append", type="primary", use_container_width=True):
+        if not new_files:
+            st.warning("Please upload at least one file to append.")
+        else:
+            added_text = ""
+            for uploaded_file in new_files:
+                added_text += f"\n\n--- Appended File: {uploaded_file.name} ---\n\n"
+                if uploaded_file.name.lower().endswith(".pdf"):
+                    try:
+                        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+                        for page in pdf_reader.pages:
+                            txt = page.extract_text()
+                            if txt: added_text += txt + "\n\n"
+                    except Exception as e:
+                        st.error(f"PDF error on {uploaded_file.name}: {e}")
+                else:
+                    added_text += uploaded_file.getvalue().decode("utf-8")
+                    
+            updated_content = (current_content or "") + added_text
+            
+            supabase.table("evidence").update({"study_content": updated_content}).eq("id", study_id).execute()
+            st.success("Documents appended successfully!")
+            st.rerun()
 
 @st.dialog("✏️ Edit Master Claim Details")
 def edit_claim_modal(claim_data, evidence_dict):
@@ -322,7 +357,6 @@ elif st.session_state.user_role == "Legal & Compliance":
         with ev_col_side:
             st.markdown("### 🎛️ Catalog Controls")
             
-            # Replaced inline form with a popup modal button
             if st.button("➕ Upload New Evidence", type="primary", use_container_width=True):
                 upload_evidence_modal()
                 
@@ -354,7 +388,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                     is_active = study.get('status') == 'Active'
                     status_icon = "🟢" if is_active else "⚪"
                     
-                    # Converted back to expanders so they are compact and space-efficient
                     with st.expander(f"{status_icon} {study.get('title', 'Untitled Study')}"):
                         st.markdown(f"""
                             {render_badge(study.get('status', 'Active'), 'active' if is_active else 'outdated')}
@@ -374,11 +407,16 @@ elif st.session_state.user_role == "Legal & Compliance":
                             pass
                         
                         st.markdown("<br>", unsafe_allow_html=True)
-                        action_col1, action_col2, _ = st.columns([2, 2, 6])
+                        action_col1, action_col2, action_col3, _ = st.columns([2, 2, 2, 4])
                         with action_col1:
                             if st.button("📄 Read Document", key=f"read_{study['id']}", use_container_width=True):
                                 view_study_modal(study.get('title'), study.get('study_content'))
                         with action_col2:
+                            # NEW FEATURE: Append button added here
+                            if is_active:
+                                if st.button("📎 Append File", key=f"append_{study['id']}", use_container_width=True):
+                                    append_document_modal(study['id'], study.get('study_content', ''))
+                        with action_col3:
                             if is_active:
                                 if st.button("🗄️ Mark Outdated", key=f"outdate_{study['id']}", type="secondary", use_container_width=True):
                                     supabase.table("evidence").update({"status": "Outdated"}).eq("id", study['id']).execute()
@@ -484,7 +522,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                     tier = c.get('tier', 'T3')
                     icon = "✅" if is_approved else "🚫"
                     
-                    # Back to expanders to save space
                     with st.expander(f"{icon} [{tier}] {c.get('claim_text', '')[:50]}..."):
                         col_claim_info, col_edit_btn = st.columns([5, 1])
                         with col_claim_info:
