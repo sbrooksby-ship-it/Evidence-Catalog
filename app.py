@@ -141,12 +141,48 @@ with sidebar:
 
 
 # ==========================================
-# MODAL DIALOGS (RECOMMENDATION 2)
+# MODAL DIALOGS
 # ==========================================
+@st.dialog("➕ Upload New Clinical Document", width="large")
+def upload_evidence_modal():
+    st.caption("Extract text from PDFs or Markdown files directly into the catalog.")
+    with st.form("add_study_form", clear_on_submit=True):
+        study_title = st.text_input("Study Title", placeholder="e.g., Clinical Trial #402")
+        evidence_type = st.selectbox("Type", ["Clinical Trial", "Literature Review", "Lab Assay", "Other"])
+        study_desc = st.text_area("Findings Summary", height=100)
+        uploaded_file = st.file_uploader("Source File", type=["pdf", "md", "txt"])
+        
+        if st.form_submit_button("Extract & Publish", type="primary", use_container_width=True):
+            if not study_title or not uploaded_file:
+                st.warning("Title and file are required.")
+            else:
+                extracted_text = ""
+                if uploaded_file.name.lower().endswith(".pdf"):
+                    try:
+                        pdf_reader = PyPDF2.PdfReader(uploaded_file)
+                        for page in pdf_reader.pages:
+                            txt = page.extract_text()
+                            if txt: extracted_text += txt + "\n\n"
+                    except Exception as e:
+                        st.error(f"PDF error: {e}")
+                else:
+                    extracted_text = uploaded_file.getvalue().decode("utf-8")
+                
+                if extracted_text:
+                    supabase.table("evidence").insert({
+                        "title": study_title,
+                        "evidence_type": evidence_type,
+                        "added_by": st.session_state.user.email,
+                        "description": study_desc,
+                        "study_content": extracted_text,
+                        "status": "Active"
+                    }).execute()
+                    st.success("Study published!")
+                    st.rerun()
+
 @st.dialog("✏️ Edit Master Claim Details")
 def edit_claim_modal(claim_data, evidence_dict):
     st.caption("Update copy text, adjust compliance tier, or assign new supporting evidence.")
-    
     updated_text = st.text_area("Master Claim Copy", value=claim_data.get('claim_text', ''), height=120)
     
     current_ev_id = claim_data.get('evidence_id')
@@ -257,7 +293,7 @@ elif st.session_state.user_role == "Legal & Compliance":
         </div>
     """, unsafe_allow_html=True)
 
-    # 1. TOP-LEVEL KPI DASHBOARD (RECOMMENDATION 1)
+    # 1. TOP-LEVEL KPI DASHBOARD
     try:
         ev_count = len(supabase.table("evidence").select("id", count="exact").eq("status", "Active").execute().data or [])
         pending_count = len(supabase.table("claim_submissions").select("id", count="exact").eq("human_status", "Pending Review").execute().data or [])
@@ -278,55 +314,23 @@ elif st.session_state.user_role == "Legal & Compliance":
     tab_evidence, tab_pipeline, tab_claims = st.tabs(["🔬 Evidence Catalog", "⚖️ Review Queue", "📋 Master Claims Registry"])
 
     # --------------------------------------------------------------------------
-    # TAB 1: EVIDENCE CATALOG (SPLIT LAYOUT & PILL FILTERS)
+    # TAB 1: EVIDENCE CATALOG
     # --------------------------------------------------------------------------
     with tab_evidence:
-        # Split Layout (Recommendation 5)
         ev_col_main, ev_col_side = st.columns([7, 3], gap="large")
         
         with ev_col_side:
             st.markdown("### 🎛️ Catalog Controls")
-            search_query = st.text_input("🔍 Keyword Search", placeholder="Title or findings...")
             
-            # Segmented Pill Filter (Recommendation 4)
-            status_filter = st.radio("Status Filter", ["All Studies", "Active Only", "Outdated Only"], horizontal=True)
-            
-            st.divider()
-            st.markdown("### ➕ Add Evidence")
-            with st.form("add_study_form", clear_on_submit=True):
-                study_title = st.text_input("Study Title", placeholder="e.g., Clinical Trial #402")
-                evidence_type = st.selectbox("Type", ["Clinical Trial", "Literature Review", "Lab Assay", "Other"])
-                study_desc = st.text_area("Findings Summary", height=100)
-                uploaded_file = st.file_uploader("Source File", type=["pdf", "md", "txt"])
+            # Replaced inline form with a popup modal button
+            if st.button("➕ Upload New Evidence", type="primary", use_container_width=True):
+                upload_evidence_modal()
                 
-                if st.form_submit_button("Extract & Publish", type="primary", use_container_width=True):
-                    if not study_title or not uploaded_file:
-                        st.warning("Title and file are required.")
-                    else:
-                        extracted_text = ""
-                        if uploaded_file.name.lower().endswith(".pdf"):
-                            try:
-                                pdf_reader = PyPDF2.PdfReader(uploaded_file)
-                                for page in pdf_reader.pages:
-                                    txt = page.extract_text()
-                                    if txt: extracted_text += txt + "\n\n"
-                            except Exception as e:
-                                st.error(f"PDF error: {e}")
-                        else:
-                            extracted_text = uploaded_file.getvalue().decode("utf-8")
-                        
-                        if extracted_text:
-                            supabase.table("evidence").insert({
-                                "title": study_title,
-                                "evidence_type": evidence_type,
-                                "added_by": st.session_state.user.email,
-                                "description": study_desc,
-                                "study_content": extracted_text,
-                                "status": "Active"
-                            }).execute()
-                            st.success("Study published!")
-                            st.rerun()
-                            
+            st.divider()
+            search_query = st.text_input("🔍 Keyword Search", placeholder="Title or findings...")
+            st.markdown("**Filter by Status**")
+            status_filter = st.radio("Status Filter", ["All Studies", "Active Only", "Outdated Only"], horizontal=True, label_visibility="collapsed")
+            
         with ev_col_main:
             st.markdown("### 📚 Scientific Library")
             try:
@@ -348,10 +352,10 @@ elif st.session_state.user_role == "Legal & Compliance":
                     
                 for study in evidence_data:
                     is_active = study.get('status') == 'Active'
+                    status_icon = "🟢" if is_active else "⚪"
                     
-                    with st.container(border=True):
-                        st.markdown(f"#### {study.get('title', 'Untitled Study')}")
-                        
+                    # Converted back to expanders so they are compact and space-efficient
+                    with st.expander(f"{status_icon} {study.get('title', 'Untitled Study')}"):
                         st.markdown(f"""
                             {render_badge(study.get('status', 'Active'), 'active' if is_active else 'outdated')}
                             {render_badge(study.get('evidence_type', 'N/A'), 'outdated')}
@@ -359,7 +363,6 @@ elif st.session_state.user_role == "Legal & Compliance":
                         
                         st.write(f"**Findings:** {study.get('description', 'N/A')}")
                         
-                        # Fetch linked claims
                         try:
                             approved = supabase.table("claims").select("*").eq("evidence_id", study['id']).eq("status", "Approved").execute().data
                             if approved:
@@ -396,7 +399,7 @@ elif st.session_state.user_role == "Legal & Compliance":
                 st.success("🎉 Inbox Zero! All claim submissions have been reviewed.")
             else:
                 for claim in pending_claims:
-                    with st.container(border=True):
+                    with st.expander(f"⏳ {claim['proposed_claim'][:60]}..."):
                         st.markdown(f"#### Proposed Copy")
                         st.info(f"**{claim['proposed_claim']}**")
                         
@@ -434,7 +437,7 @@ elif st.session_state.user_role == "Legal & Compliance":
             st.error(f"Error fetching queue: {e}")
 
     # --------------------------------------------------------------------------
-    # TAB 3: MASTER CLAIMS REGISTRY (SPLIT LAYOUT & PILL FILTERS)
+    # TAB 3: MASTER CLAIMS REGISTRY
     # --------------------------------------------------------------------------
     with tab_claims:
         mc_col_main, mc_col_side = st.columns([7, 3], gap="large")
@@ -443,7 +446,6 @@ elif st.session_state.user_role == "Legal & Compliance":
             st.markdown("### 🎛️ Registry Controls")
             claims_search = st.text_input("🔍 Search copy...", placeholder="Enter keyword...")
             
-            # Segmented Pill Filter (Recommendation 4)
             st.markdown("**Filter by Tier**")
             tier_filter = st.radio("Tier", ["All Tiers", "T1 (Primary)", "T2 (Substantiated)", "T3 (Qualified)"], horizontal=True, label_visibility="collapsed")
             
@@ -480,8 +482,10 @@ elif st.session_state.user_role == "Legal & Compliance":
                     status = c.get('status', 'Approved')
                     is_approved = status == "Approved"
                     tier = c.get('tier', 'T3')
+                    icon = "✅" if is_approved else "🚫"
                     
-                    with st.container(border=True):
+                    # Back to expanders to save space
+                    with st.expander(f"{icon} [{tier}] {c.get('claim_text', '')[:50]}..."):
                         col_claim_info, col_edit_btn = st.columns([5, 1])
                         with col_claim_info:
                             st.markdown(
