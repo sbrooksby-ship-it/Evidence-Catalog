@@ -23,7 +23,19 @@ type Evidence = {
   evidence_type?: string | null;
   description?: string | null;
   status?: string | null;
+  fit_score?: number;
 };
+
+const SAMPLE_STUDIES: Evidence[] = [
+  { id: "sample-hydration", title: "12-week hydration efficacy trial", evidence_type: "Clinical Trial", description: "+38% skin moisture · n = 240 · 2025", fit_score: 86 },
+  { id: "sample-consumer-texture", title: "Consumer perception panel — texture", evidence_type: "Consumer Research", description: "9 in 10 prefer feel · n = 500 · 2026", fit_score: 42 },
+  { id: "sample-ingredient-stability", title: "Ingredient stability under heat", evidence_type: "Lab Assay", description: "Stable to 45°C · n = 36 · 2024", fit_score: 72 },
+  { id: "sample-wear-test", title: "Real-world wear test, humid climates", evidence_type: "Field Study", description: "16-hour wear · n = 120 · 2025", fit_score: 68 },
+  { id: "sample-irritation", title: "Dermatologist-graded irritation study", evidence_type: "Clinical Trial", description: "0 reactions reported · n = 110 · 2026", fit_score: 92 },
+  { id: "sample-scent-recall", title: "Scent recall & preference survey", evidence_type: "Consumer Research", description: "74% recall at 7 days · n = 820 · 2025", fit_score: 54 },
+  { id: "sample-barrier-repair", title: "Barrier repair in dry climates", evidence_type: "Clinical Trial", description: "Improved barrier scores · n = 180 · 2025", fit_score: 81 },
+  { id: "sample-botanical-screen", title: "Botanical extract screening", evidence_type: "Lab Assay", description: "Antioxidant activity confirmed · n = 48 · 2024", fit_score: 63 },
+];
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -49,7 +61,7 @@ const categoryCode: Record<string, string> = {
 export default function MarketingWorkspace() {
   const [studies, setStudies] = useState<Evidence[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const [demoMode, setDemoMode] = useState(false);
   const [search, setSearch] = useState("");
   const [studyFilter, setStudyFilter] = useState("All studies");
   const [claim, setClaim] = useState("");
@@ -62,7 +74,8 @@ export default function MarketingWorkspace() {
     let active = true;
     async function loadStudies() {
       if (!supabase) {
-        setLoadError("Add your Supabase URL and anon key to .env.local to connect the study library.");
+        setStudies(SAMPLE_STUDIES);
+        setDemoMode(true);
         setLoading(false);
         return;
       }
@@ -72,8 +85,13 @@ export default function MarketingWorkspace() {
         .eq("status", "Active")
         .order("created_at", { ascending: false });
       if (!active) return;
-      if (error) setLoadError(error.message);
-      else setStudies((data ?? []) as Evidence[]);
+      if (error || !data?.length) {
+        setStudies(SAMPLE_STUDIES);
+        setDemoMode(true);
+      } else {
+        setStudies(data as Evidence[]);
+        setDemoMode(false);
+      }
       setLoading(false);
     }
     void loadStudies();
@@ -89,15 +107,20 @@ export default function MarketingWorkspace() {
   const evidenceTypes = useMemo(() => ["All studies", ...Array.from(new Set(studies.map(studyCategory)))], [studies]);
   const selectedStudy = studies.find((study) => study.id === evidenceId);
   const typeCount = new Set(studies.map(studyCategory)).size;
+  const evidenceFit = selectedStudy?.fit_score ?? 68;
 
   async function submitClaim(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!supabase) {
-      toast.error("Supabase is not configured yet.");
-      return;
-    }
     if (!claim.trim()) {
       toast.error("Add the campaign copy you want to submit.");
+      return;
+    }
+    if (!supabase || demoMode) {
+      toast.success("Demo draft ready", { description: "Connect Supabase to save this claim to your workspace." });
+      setClaim("");
+      setEmail("");
+      setTier("T2");
+      setEvidenceId("");
       return;
     }
     setSubmitting(true);
@@ -175,22 +198,21 @@ export default function MarketingWorkspace() {
 
         <div className="fd-content-grid">
           <section className="fd-panel fd-library" aria-labelledby="library-heading">
-            <div className="fd-section-head"><div><h2 id="library-heading">Research library</h2><p>Active studies available to support your copy.</p></div><span className="fd-results">{visibleStudies.length} results</span></div>
+            <div className="fd-section-head"><div><h2 id="library-heading">Research library</h2><p>Active studies available to support your copy.</p></div><span className="fd-results">{visibleStudies.length} {demoMode ? "sample " : ""}results</span></div>
             <label className="fd-search"><Search aria-hidden="true" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search studies, outcomes, authors..." aria-label="Search studies, outcomes, or authors" /></label>
             <div className="fd-filters" role="group" aria-label="Filter studies by category">
               {evidenceTypes.map((type) => <button className={studyFilter === type ? "selected" : ""} type="button" key={type} onClick={() => setStudyFilter(type)} aria-pressed={studyFilter === type}>{type}</button>)}
             </div>
             <div className="fd-study-list">
               {loading && <div className="fd-message">Loading the research library...</div>}
-              {!loading && loadError && <div className="fd-message fd-error">{loadError}</div>}
-              {!loading && !loadError && visibleStudies.length === 0 && <div className="fd-message">No active studies match this search.</div>}
-              {!loading && !loadError && visibleStudies.map((study) => {
+              {!loading && visibleStudies.length === 0 && <div className="fd-message">No active studies match this search.</div>}
+              {!loading && visibleStudies.map((study) => {
                 const category = studyCategory(study);
                 const isSelected = evidenceId === study.id;
                 return <button className={`fd-study-row${isSelected ? " is-selected" : ""}`} data-category={category} key={study.id} type="button" aria-pressed={isSelected} onClick={() => setEvidenceId(isSelected ? "" : study.id)}>
                   <span className="fd-study-code">{categoryCode[category]}</span>
                   <span className="fd-study-info"><strong>{study.title}</strong><small>{study.description || study.evidence_type || "Active study"}</small></span>
-                  <span className="fd-study-mark" aria-hidden="true">{isSelected ? <CheckCircle2 /> : <FileText />}</span>
+                  <span className="fd-study-strength" aria-label={`${study.fit_score ?? 68}% evidence strength`}>{[0, 1, 2, 3, 4].map((bar) => <i key={bar} className={bar < Math.round((study.fit_score ?? 68) / 20) ? "filled" : ""} />)}</span>
                 </button>;
               })}
             </div>
@@ -219,6 +241,7 @@ export default function MarketingWorkspace() {
               <div className="fd-evidence-fit" aria-live="polite">
                 <div><span>Evidence fit</span><span className="fd-fit-track"><i className={selectedStudy ? "has-study" : ""} /></span><strong>{selectedStudy ? "Linked" : "—"}</strong></div>
                 {selectedStudy && <p>{selectedStudy.title}</p>}
+                <span className="fd-fit-score">{selectedStudy ? evidenceFit : "—"}</span>
               </div>
               <label className="fd-field fd-email-field">
                 <span className="fd-field-head"><span className="fd-field-label">Work email</span><span className="fd-field-meta">Optional</span></span>
