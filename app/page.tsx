@@ -5,10 +5,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   Activity,
   BookOpen,
-  Check,
   CheckCircle2,
   ChevronDown,
-  FileText,
   Layers3,
   Link2,
   PencilLine,
@@ -16,6 +14,7 @@ import {
   Send,
 } from "lucide-react";
 import { toast } from "sonner";
+import GlassEvidenceFolder from "./components/glass-evidence-folder";
 
 type Evidence = {
   id: string;
@@ -51,19 +50,13 @@ const studyCategory = (study: Evidence) => {
   return "Field";
 };
 
-const categoryCode: Record<string, string> = {
-  Clinical: "CLI",
-  Consumer: "CON",
-  Lab: "LAB",
-  Field: "FIE",
-};
-
 export default function MarketingWorkspace() {
   const [studies, setStudies] = useState<Evidence[]>([]);
   const [loading, setLoading] = useState(true);
   const [demoMode, setDemoMode] = useState(false);
   const [search, setSearch] = useState("");
   const [studyFilter, setStudyFilter] = useState("All studies");
+  const [openFolder, setOpenFolder] = useState("Clinical");
   const [claim, setClaim] = useState("");
   const [email, setEmail] = useState("");
   const [tier, setTier] = useState("T2");
@@ -105,6 +98,14 @@ export default function MarketingWorkspace() {
   }), [studies, search, studyFilter]);
 
   const evidenceTypes = useMemo(() => ["All studies", ...Array.from(new Set(studies.map(studyCategory)))], [studies]);
+  const groupedStudies = useMemo(() => {
+    const groups = new Map<string, Evidence[]>();
+    visibleStudies.forEach((study) => {
+      const category = studyCategory(study);
+      groups.set(category, [...(groups.get(category) ?? []), study]);
+    });
+    return Array.from(groups.entries());
+  }, [visibleStudies]);
   const selectedStudy = studies.find((study) => study.id === evidenceId);
   const typeCount = new Set(studies.map(studyCategory)).size;
   const evidenceFit = selectedStudy?.fit_score ?? 68;
@@ -203,17 +204,27 @@ export default function MarketingWorkspace() {
             <div className="fd-filters" role="group" aria-label="Filter studies by category">
               {evidenceTypes.map((type) => <button className={studyFilter === type ? "selected" : ""} type="button" key={type} onClick={() => setStudyFilter(type)} aria-pressed={studyFilter === type}>{type}</button>)}
             </div>
-            <div className="fd-study-list">
+            <div className="fd-folder-grid">
               {loading && <div className="fd-message">Loading the research library...</div>}
               {!loading && visibleStudies.length === 0 && <div className="fd-message">No active studies match this search.</div>}
-              {!loading && visibleStudies.map((study) => {
-                const category = studyCategory(study);
-                const isSelected = evidenceId === study.id;
-                return <button className={`fd-study-row${isSelected ? " is-selected" : ""}`} data-category={category} key={study.id} type="button" aria-pressed={isSelected} onClick={() => setEvidenceId(isSelected ? "" : study.id)}>
-                  <span className="fd-study-code">{categoryCode[category]}</span>
-                  <span className="fd-study-info"><strong>{study.title}</strong><small>{study.description || study.evidence_type || "Active study"}</small></span>
-                  <span className="fd-study-strength" aria-label={`${study.fit_score ?? 68}% evidence strength`}>{[0, 1, 2, 3, 4].map((bar) => <i key={bar} className={bar < Math.round((study.fit_score ?? 68) / 20) ? "filled" : ""} />)}</span>
-                </button>;
+              {!loading && groupedStudies.map(([category, categoryStudies]) => {
+                const isOpen = openFolder === category;
+                const files = categoryStudies.map((study) => ({
+                  id: study.id,
+                  title: study.title,
+                  meta: study.description || study.evidence_type || "Active study",
+                  fitScore: study.fit_score ?? 68,
+                }));
+                return <div className="fd-folder-cell" data-open={isOpen || undefined} key={category}>
+                <GlassEvidenceFolder
+                  category={category}
+                  files={files}
+                  selectedId={evidenceId}
+                  onSelect={(id) => setEvidenceId(evidenceId === id ? "" : id)}
+                  open={isOpen}
+                  onOpenChange={(next) => setOpenFolder(next ? category : "")}
+                />
+              </div>;
               })}
             </div>
           </section>
