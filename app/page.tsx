@@ -2,19 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import {
-  Activity,
-  BookOpen,
-  Check,
-  CheckCircle2,
-  ChevronDown,
-  FileText,
-  Layers3,
-  Link2,
-  PencilLine,
-  Search,
-  Send,
-} from "lucide-react";
+import { ChevronDown, Search, Send } from "lucide-react";
 import { toast } from "sonner";
 
 type Evidence = {
@@ -72,6 +60,7 @@ export default function MarketingWorkspace() {
 
   useEffect(() => {
     let active = true;
+
     async function loadStudies() {
       if (!supabase) {
         setStudies(SAMPLE_STUDIES);
@@ -79,12 +68,15 @@ export default function MarketingWorkspace() {
         setLoading(false);
         return;
       }
+
       const { data, error } = await supabase
         .from("evidence")
         .select("id, title, evidence_type, description, status")
         .eq("status", "Active")
         .order("created_at", { ascending: false });
+
       if (!active) return;
+
       if (error || !data?.length) {
         setStudies(SAMPLE_STUDIES);
         setDemoMode(true);
@@ -92,37 +84,53 @@ export default function MarketingWorkspace() {
         setStudies(data as Evidence[]);
         setDemoMode(false);
       }
+
       setLoading(false);
     }
+
     void loadStudies();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const visibleStudies = useMemo(() => studies.filter((study) => {
-    const matchesText = `${study.title} ${study.evidence_type ?? ""} ${study.description ?? ""}`.toLowerCase().includes(search.toLowerCase());
-    const matchesType = studyFilter === "All studies" || studyCategory(study) === studyFilter;
-    return matchesText && matchesType;
-  }), [studies, search, studyFilter]);
+  const visibleStudies = useMemo(() => {
+    return studies.filter((study) => {
+      const matchesText = `${study.title} ${study.evidence_type ?? ""} ${study.description ?? ""}`
+        .toLowerCase()
+        .includes(search.toLowerCase());
+      const matchesType = studyFilter === "All studies" || studyCategory(study) === studyFilter;
+      return matchesText && matchesType;
+    });
+  }, [studies, search, studyFilter]);
 
-  const evidenceTypes = useMemo(() => ["All studies", ...Array.from(new Set(studies.map(studyCategory)))], [studies]);
+  const evidenceTypes = useMemo(
+    () => ["All studies", ...Array.from(new Set(studies.map(studyCategory)))],
+    [studies],
+  );
+
   const selectedStudy = studies.find((study) => study.id === evidenceId);
-  const typeCount = new Set(studies.map(studyCategory)).size;
-  const evidenceFit = selectedStudy?.fit_score ?? 68;
+  const evidenceFit = selectedStudy?.fit_score ?? 42;
 
   async function submitClaim(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
     if (!claim.trim()) {
       toast.error("Add the campaign copy you want to submit.");
       return;
     }
+
     if (!supabase || demoMode) {
-      toast.success("Demo draft ready", { description: "Connect Supabase to save this claim to your workspace." });
+      toast.success("Demo draft ready", {
+        description: "Connect Supabase to save this claim to your workspace.",
+      });
       setClaim("");
       setEmail("");
       setTier("T2");
       setEvidenceId("");
       return;
     }
+
     setSubmitting(true);
     const { error } = await supabase.from("claim_submissions").insert({
       proposed_claim: claim.trim(),
@@ -131,11 +139,14 @@ export default function MarketingWorkspace() {
       human_status: "Pending Review",
       evidence_id: evidenceId || null,
     });
+
     setSubmitting(false);
+
     if (error) {
       toast.error("Your draft could not be submitted", { description: error.message });
       return;
     }
+
     toast.success("Draft added", { description: "Your claim is ready for the next review step." });
     setClaim("");
     setEmail("");
@@ -144,116 +155,171 @@ export default function MarketingWorkspace() {
   }
 
   return (
-    <div className="fd-workspace">
-      <aside className="fd-sidebar">
-        <div className="fd-brand">
-          <div className="fd-brand-mark">c</div>
-          <div className="fd-brand-copy"><strong>Claims Portal</strong><span>Fieldnotes</span></div>
-        </div>
-        <div className="fd-sidebar-label">Workspace</div>
-        <nav className="fd-nav" aria-label="Workspace navigation">
-          <button className="fd-nav-item is-active" type="button" aria-current="page">
-            <BookOpen aria-hidden="true" /><span>Marketing desk</span><span className="fd-nav-count">{loading ? "—" : studies.length}</span>
-          </button>
-          <button className="fd-nav-item" type="button" disabled><PencilLine aria-hidden="true" /><span>My drafts</span></button>
-          <button className="fd-nav-item" type="button" disabled><CheckCircle2 aria-hidden="true" /><span>Approved claims</span></button>
-        </nav>
-        <aside className="fd-tip"><span>Tip</span><p>Tier 3 claims need a clinical or lab study with a sample above 100.</p></aside>
-      </aside>
-
-      <main className="fd-main">
-        <div className="fd-topline">
-          <div className="fd-breadcrumb"><span>Campaign workspace</span><b>/</b><strong>01</strong></div>
-          <div className="fd-user-area"><div className="fd-team"><i />Marketing team <b>·</b> Fieldnotes</div><div className="fd-avatar">AR</div></div>
+    <div className="marketing-shell">
+      <section className="panel library-panel">
+        <div className="panel-header">
+          <div>
+            <h1>Research library</h1>
+            <p>Active studies available to support your copy.</p>
+          </div>
+          <span className="result-count">
+            {visibleStudies.length} {demoMode ? "sample" : "results"}
+          </span>
         </div>
 
-        <header className="fd-hero">
-          <h1 className="fd-hero-title">Good claims start<br />with <em>good evidence.</em></h1>
-          <div className="fd-hero-aside">
-            <p>Find the research. Shape the story. Send your draft forward, with the proof already attached.</p>
-            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>1</b>Find a study</span><span><b>2</b>Write the claim</span><span><b>3</b>Send for review</span></div>
-          </div>
-        </header>
+        <label className="search-field" aria-label="Search studies">
+          <Search aria-hidden="true" />
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search studies, outcomes, authors..."
+          />
+        </label>
 
-        <section className="fd-stats" aria-label="Workspace overview">
-          <div className="fd-stat">
-            <div className="fd-metric-label">Available studies <BookOpen aria-hidden="true" /></div>
-            <div className="fd-metric-line"><span className="fd-metric-value">{loading ? "—" : studies.length.toString().padStart(2, "0")}</span><span>active</span></div>
-            <div className="fd-metric-track"><i style={{ width: studies.length ? "72%" : "0%" }} /></div>
-            <p className="fd-metric-caption">Active research, ready to support your copy</p>
-          </div>
-          <div className="fd-stat">
-            <div className="fd-metric-label">Evidence types <Layers3 aria-hidden="true" /></div>
-            <div className="fd-metric-line"><span className="fd-metric-value">{loading ? "—" : typeCount.toString().padStart(2, "0")}</span><span>categories</span></div>
-            <div className="fd-metric-track"><i style={{ width: typeCount ? `${Math.min(typeCount / 4, 1) * 100}%` : "0%" }} /></div>
-            <p className="fd-metric-caption">{evidenceTypes.slice(1).join(" · ") || "Study types appear here"}</p>
-          </div>
-          <div className="fd-stat fd-stat-featured">
-            <div className="fd-metric-label">Drafting status <Activity aria-hidden="true" /></div>
-            <div className="fd-featured-line">In motion</div>
-            <div className="fd-activity-bars" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
-            <p className="fd-metric-caption">Ready when you are</p>
-          </div>
-        </section>
+        <div className="filter-row" role="group" aria-label="Study category filters">
+          {evidenceTypes.map((type) => (
+            <button
+              key={type}
+              type="button"
+              className={studyFilter === type ? "selected" : ""}
+              onClick={() => setStudyFilter(type)}
+              aria-pressed={studyFilter === type}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
 
-        <div className="fd-content-grid">
-          <section className="fd-panel fd-library" aria-labelledby="library-heading">
-            <div className="fd-section-head"><div><h2 id="library-heading">Research library</h2><p>Active studies available to support your copy.</p></div><span className="fd-results">{visibleStudies.length} {demoMode ? "sample " : ""}results</span></div>
-            <label className="fd-search"><Search aria-hidden="true" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search studies, outcomes, authors..." aria-label="Search studies, outcomes, or authors" /></label>
-            <div className="fd-filters" role="group" aria-label="Filter studies by category">
-              {evidenceTypes.map((type) => <button className={studyFilter === type ? "selected" : ""} type="button" key={type} onClick={() => setStudyFilter(type)} aria-pressed={studyFilter === type}>{type}</button>)}
-            </div>
-            <div className="fd-study-list">
-              {loading && <div className="fd-message">Loading the research library...</div>}
-              {!loading && visibleStudies.length === 0 && <div className="fd-message">No active studies match this search.</div>}
-              {!loading && visibleStudies.map((study) => {
-                const category = studyCategory(study);
-                const isSelected = evidenceId === study.id;
-                return <button className={`fd-study-row${isSelected ? " is-selected" : ""}`} data-category={category} key={study.id} type="button" aria-pressed={isSelected} onClick={() => setEvidenceId(isSelected ? "" : study.id)}>
-                  <span className="fd-study-code">{categoryCode[category]}</span>
-                  <span className="fd-study-info"><strong>{study.title}</strong><small>{study.description || study.evidence_type || "Active study"}</small></span>
-                  <span className="fd-study-strength" aria-label={`${study.fit_score ?? 68}% evidence strength`}>{[0, 1, 2, 3, 4].map((bar) => <i key={bar} className={bar < Math.round((study.fit_score ?? 68) / 20) ? "filled" : ""} />)}</span>
-                </button>;
+        <div className="study-list">
+          {loading && <div className="empty-state">Loading the research library...</div>}
+          {!loading && visibleStudies.length === 0 && (
+            <div className="empty-state">No active studies match this search.</div>
+          )}
+
+          {!loading &&
+            visibleStudies.map((study) => {
+              const category = studyCategory(study);
+              const isSelected = evidenceId === study.id;
+              const strengthValue = Math.max(1, Math.round((study.fit_score ?? 68) / 20));
+
+              return (
+                <button
+                  key={study.id}
+                  type="button"
+                  className={`study-row ${isSelected ? "selected" : ""}`}
+                  data-category={category}
+                  onClick={() => setEvidenceId(isSelected ? "" : study.id)}
+                  aria-pressed={isSelected}
+                >
+                  <span className="study-badge">{categoryCode[category]}</span>
+                  <div className="study-copy">
+                    <strong>{study.title}</strong>
+                    <small>{study.description || study.evidence_type || "Active study"}</small>
+                  </div>
+                  <span className="strength-bars" aria-label={`${study.fit_score ?? 68}% evidence strength`}>
+                    {[0, 1, 2, 3, 4].map((bar) => (
+                      <i key={bar} className={bar < strengthValue ? "filled" : ""} />
+                    ))}
+                  </span>
+                </button>
+              );
+            })}
+        </div>
+      </section>
+
+      <section className="panel draft-panel">
+        <div className="panel-header draft-header">
+          <div>
+            <h2>Start a claim draft</h2>
+            <p>Connect your campaign copy to its supporting study.</p>
+          </div>
+        </div>
+
+        <form className="draft-form" onSubmit={submitClaim}>
+          <label className="field-group">
+            <span className="field-head">
+              <span className="field-label">Proposed claim</span>
+              <span className="field-meta">{claim.length} / 180</span>
+            </span>
+            <textarea
+              value={claim}
+              onChange={(event) => setClaim(event.target.value)}
+              placeholder="Write the exact copy you want to use..."
+              maxLength={180}
+              required
+            />
+          </label>
+
+          <fieldset className="field-group tier-field">
+            <legend className="field-label">Target tier</legend>
+            <div className="tier-grid" role="radiogroup" aria-label="Target tier options">
+              {["T1", "T2", "T3"].map((value) => {
+                const label = value === "T1" ? "Indicative" : value === "T2" ? "Substantiated" : "Clinical";
+                return (
+                  <label key={value} className={tier === value ? "tier-option selected" : "tier-option"}>
+                    <input
+                      type="radio"
+                      name="tier"
+                      value={value}
+                      checked={tier === value}
+                      onChange={() => setTier(value)}
+                    />
+                    <span className="tier-code">{value}</span>
+                    <span>{label}</span>
+                  </label>
+                );
               })}
             </div>
-          </section>
+          </fieldset>
 
-          <section className="fd-panel fd-draft" aria-labelledby="draft-heading">
-            <div className="fd-section-head"><div><h2 id="draft-heading">Start a claim draft</h2><p>Connect your campaign copy to its supporting study.</p></div></div>
-            <form className="fd-form" onSubmit={submitClaim}>
-              <label className="fd-field fd-claim-field">
-                <span className="fd-field-head"><span className="fd-field-label">Proposed claim</span><span className="fd-field-meta">{claim.length} / 180</span></span>
-                <textarea value={claim} onChange={(event) => setClaim(event.target.value)} placeholder="Write the exact copy you want to use..." maxLength={180} required />
-              </label>
-              <fieldset className="fd-field fd-tier-field">
-                <legend className="fd-field-label">Target tier</legend>
-                <div className="fd-tier-options" role="radiogroup" aria-label="Target claim tier">
-                  {[["T1", "Indicative"], ["T2", "Substantiated"], ["T3", "Clinical"]].map(([value, label]) => <label className={tier === value ? "is-selected" : ""} key={value}>
-                    <input type="radio" name="tier" value={value} checked={tier === value} onChange={() => setTier(value)} />
-                    <span className="fd-tier-code">{value}</span><span>{label}</span>
-                  </label>)}
-                </div>
-              </fieldset>
-              <label className="fd-field">
-                <span className="fd-field-label">Supporting study</span>
-                <span className="fd-select-wrap"><Link2 aria-hidden="true" /><select value={evidenceId} onChange={(event) => setEvidenceId(event.target.value)}><option value="">Pick a study from the library to link it.</option>{studies.map((study) => <option key={study.id} value={study.id}>{study.title}</option>)}</select><ChevronDown aria-hidden="true" /></span>
-              </label>
-              <div className="fd-evidence-fit" aria-live="polite">
-                <div><span>Evidence fit</span><span className="fd-fit-track"><i className={selectedStudy ? "has-study" : ""} /></span><strong>{selectedStudy ? "Linked" : "—"}</strong></div>
-                {selectedStudy && <p>{selectedStudy.title}</p>}
-                <span className="fd-fit-score">{selectedStudy ? evidenceFit : "—"}</span>
+          <label className="field-group">
+            <span className="field-label">Supporting study</span>
+            <span className="select-wrap">
+              <select value={evidenceId} onChange={(event) => setEvidenceId(event.target.value)}>
+                <option value="">Select a supporting study</option>
+                {studies.map((study) => (
+                  <option key={study.id} value={study.id}>
+                    {study.title}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown aria-hidden="true" />
+            </span>
+          </label>
+
+          <div className={`evidence-box ${selectedStudy ? "is-linked" : ""}`} aria-live="polite">
+            <div className="evidence-topline">
+              <span>Evidence fit</span>
+              <div className="fit-meter">
+                <span style={{ width: selectedStudy ? `${Math.min(100, evidenceFit)}%` : "42%" }} />
               </div>
-              <label className="fd-field fd-email-field">
-                <span className="fd-field-head"><span className="fd-field-label">Work email</span><span className="fd-field-meta">Optional</span></span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
-              </label>
-              <button className="fd-submit" type="submit" disabled={submitting}><span>{submitting ? "Sending draft..." : "Send draft for review"}</span><Send aria-hidden="true" /></button>
-              <p className="fd-form-foot">Your draft is saved with the study you selected.</p>
-            </form>
-          </section>
-        </div>
-        <footer className="fd-footer"><span>Claims Portal · Fieldnotes</span><span>Research informed · Copy ready</span></footer>
-      </main>
+              <strong>{selectedStudy ? "Linked" : "—"}</strong>
+            </div>
+            {selectedStudy ? <p>{selectedStudy.title}</p> : null}
+            <span className="fit-score">{selectedStudy ? evidenceFit : "42"}</span>
+          </div>
+
+          <label className="field-group">
+            <span className="field-head">
+              <span className="field-label">Work email</span>
+              <span className="field-meta">Optional</span>
+            </span>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@company.com"
+            />
+          </label>
+
+          <button className="submit-button" type="submit" disabled={submitting}>
+            <span>{submitting ? "Sending draft..." : "Send draft for review"}</span>
+            <Send aria-hidden="true" />
+          </button>
+
+          <p className="form-foot">Your draft is saved with the study you selected.</p>
+        </form>
+      </section>
     </div>
   );
 }
