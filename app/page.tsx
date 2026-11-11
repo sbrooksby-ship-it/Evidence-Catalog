@@ -60,7 +60,7 @@ const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supp
 const CLAIM_CATEGORIES = ["Clinical Claims", "Substantiated Claims", "Indicative Claims", "Field Claims"] as const;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
   role: "assistant",
-  content: "Share a product benefit or draft claim. I’ll help you workshop the wording and flag regulatory considerations.",
+  content: "Hi, I’m Ivy. Share a product benefit or draft claim, and I’ll help workshop the wording and flag regulatory considerations.",
 };
 
 function claimCategory(tier: string | null): typeof CLAIM_CATEGORIES[number] {
@@ -567,12 +567,12 @@ export default function MarketingWorkspace() {
       <aside className="fd-sidebar">
         <div className="fd-brand">
           <div className="fd-brand-mark">c</div>
-          <div className="fd-brand-copy"><strong>Claims Portal</strong><span>Fieldnotes</span></div>
+          <div className="fd-brand-copy"><strong>Claims Portal</strong><span>Ivy Evergreen</span></div>
         </div>
         <div className="fd-sidebar-label">Workspace</div>
         <nav className="fd-nav" aria-label="Workspace navigation">
           <button className={`fd-nav-item${activeThreadId === "main" ? " is-active" : ""}`} type="button" onClick={() => selectThread("main")} aria-current={activeThreadId === "main" ? "page" : undefined}>
-            <Sparkles aria-hidden="true" /><span>Compliance Co-Pilot</span><span className="fd-nav-count">Live</span>
+            <Sparkles aria-hidden="true" /><span>Ivy</span><span className="fd-nav-count">Live</span>
           </button>
         </nav>
         <section className="fd-thread-section" aria-label="Deep audit threads">
@@ -598,7 +598,7 @@ export default function MarketingWorkspace() {
       <main className="fd-main">
         <div className="fd-topline">
           <div className="fd-breadcrumb"><span>Campaign workspace</span><b>/</b><strong>01</strong></div>
-          <div className="fd-user-area"><div className="fd-team"><i />Marketing team <b>·</b> Fieldnotes</div><div className="fd-avatar">AR</div></div>
+          <div className="fd-user-area"><div className="fd-team"><i />Marketing team <b>·</b> Ivy Evergreen</div><div className="fd-avatar">AR</div></div>
         </div>
 
         <header className="fd-hero">
@@ -713,7 +713,7 @@ export default function MarketingWorkspace() {
                 {chatLoading && <div className="fd-chat-message is-assistant" role="status"><Sparkles aria-hidden="true" /><p>Thinking through the claim…</p></div>}
               </div>
               <form className="fd-chat-compose" onSubmit={sendChatMessage}>
-                <label className="fd-sr-only" htmlFor="claim-chat-input">Message the claim co-pilot</label>
+                <label className="fd-sr-only" htmlFor="claim-chat-input">Message Ivy</label>
                 <textarea id="claim-chat-input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Describe the product benefit or claim you want to explore..." maxLength={3000} required />
                 <button type="submit" aria-label="Send message" disabled={chatLoading || !chatInput.trim()}><Send aria-hidden="true" /></button>
               </form>
@@ -755,7 +755,7 @@ export default function MarketingWorkspace() {
             </form>}
           </section>
         </div>
-        <footer className="fd-footer"><span>Claims Portal · Fieldnotes</span><span>Research informed · Copy ready</span></footer>
+        <footer className="fd-footer"><span>Claims Portal · Ivy Evergreen</span><span>Research informed · Copy ready</span></footer>
       </main>
     </div>
   );

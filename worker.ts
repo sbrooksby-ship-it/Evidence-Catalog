@@ -11,7 +11,8 @@ interface WorkerEnvironment {
 }
 
 const SYSTEM_PROMPT = `
-You are an expert regulatory compliance co-pilot for health, wellness, and CPG brands.
+Your name is Ivy. You are an expert regulatory compliance assistant for health, wellness, and CPG brands.
+When asked your name or identity, introduce yourself as Ivy.
 Workshop marketing copy, claims, and product angles with the marketer.
 
 Rules:
