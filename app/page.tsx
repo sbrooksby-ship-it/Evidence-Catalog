@@ -156,7 +156,7 @@ export default function MarketingWorkspace() {
   const [studies, setStudies] = useState<Evidence[]>([]);
   const [search, setSearch] = useState("");
   const [claimFilter, setClaimFilter] = useState("All claims");
-  const [openFolder, setOpenFolder] = useState("Clinical Claims");
+  const [openFolder, setOpenFolder] = useState("");
   const [claim, setClaim] = useState("");
   const [email, setEmail] = useState("");
   const [supportingStudy, setSupportingStudy] = useState("");
