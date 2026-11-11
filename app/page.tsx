@@ -12,6 +12,7 @@ import {
   PencilLine,
   Search,
   Send,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import GlassEvidenceFolder from "./components/glass-evidence-folder";
@@ -24,6 +25,20 @@ type Evidence = {
   status?: string | null;
   fit_score?: number;
 };
+
+type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const INITIAL_CHAT_MESSAGE: ChatMessage = {
+  role: "assistant",
+  content: "Share a product benefit or draft claim. I’ll help you workshop the wording and flag regulatory considerations.",
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 const SAMPLE_STUDIES: Evidence[] = [
   { id: "sample-hydration", title: "12-week hydration efficacy trial", evidence_type: "Clinical Trial", description: "+38% skin moisture · n = 240 · 2025", fit_score: 86 },
@@ -62,6 +77,9 @@ export default function MarketingWorkspace() {
   const [tier, setTier] = useState("T2");
   const [evidenceId, setEvidenceId] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([INITIAL_CHAT_MESSAGE]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -110,10 +128,71 @@ export default function MarketingWorkspace() {
   const typeCount = new Set(studies.map(studyCategory)).size;
   const evidenceFit = selectedStudy?.fit_score ?? 68;
 
+  async function sendChatMessage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const content = chatInput.trim();
+    if (!content || chatLoading) return;
+
+    const userMessage: ChatMessage = { role: "user", content };
+    const conversation = [...chatMessages.slice(-19), userMessage];
+    setChatMessages(conversation);
+    setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: conversation }),
+      });
+
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error("The chat service returned an unreadable response.");
+      }
+
+      if (!isRecord(payload)) {
+        throw new Error("The chat service returned an invalid response.");
+      }
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "The chat request failed.");
+      }
+      if (typeof payload.reply !== "string") {
+        throw new Error("The chat service did not return a reply.");
+      }
+
+      const reply = payload.reply.trim();
+      const auditReady = reply.match(/\[AUDIT_READY:\s*([^\]]+)\]\s*$/);
+      const assistantContent = auditReady ? reply.slice(0, auditReady.index).trim() : reply;
+      if (auditReady) {
+        setClaim(auditReady[1].trim());
+      }
+      const assistantMessage: ChatMessage = {
+        role: "assistant",
+        content: assistantContent || "This claim is ready to prepare for review.",
+      };
+      setChatMessages([...conversation, assistantMessage].slice(-20));
+    } catch (error) {
+      setChatMessages(chatMessages);
+      setChatInput(content);
+      toast.error("Could not get a chat reply", {
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
   async function submitClaim(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!claim.trim()) {
       toast.error("Add the campaign copy you want to submit.");
+      return;
+    }
+    if (claim.trim().length > 180) {
+      toast.error("Shorten the proposed claim to 180 characters or fewer.");
       return;
     }
     if (!supabase || demoMode) {
@@ -122,6 +201,7 @@ export default function MarketingWorkspace() {
       setEmail("");
       setTier("T2");
       setEvidenceId("");
+      setChatMessages([INITIAL_CHAT_MESSAGE]);
       return;
     }
     setSubmitting(true);
@@ -142,6 +222,7 @@ export default function MarketingWorkspace() {
     setEmail("");
     setTier("T2");
     setEvidenceId("");
+    setChatMessages([INITIAL_CHAT_MESSAGE]);
   }
 
   return (
@@ -230,11 +311,26 @@ export default function MarketingWorkspace() {
           </section>
 
           <section className="fd-panel fd-draft" aria-labelledby="draft-heading">
-            <div className="fd-section-head"><div><h2 id="draft-heading">Start a claim draft</h2><p>Connect your campaign copy to its supporting study.</p></div></div>
-            <form className="fd-form" onSubmit={submitClaim}>
+            <div className="fd-section-head"><div><h2 id="draft-heading">Workshop a claim</h2><p>Talk through your idea, then prepare a claim for review.</p></div></div>
+            <div className="fd-chat">
+              <div className="fd-chat-log" role="log" aria-live="polite" aria-label="Claim workshop conversation">
+                {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}`} key={`${index}-${message.role}`}>
+                  {message.role === "assistant" && <Sparkles aria-hidden="true" />}
+                  <p>{message.content}</p>
+                </div>)}
+                {chatLoading && <div className="fd-chat-message is-assistant" role="status"><Sparkles aria-hidden="true" /><p>Thinking through the claim…</p></div>}
+              </div>
+              <form className="fd-chat-compose" onSubmit={sendChatMessage}>
+                <label className="fd-sr-only" htmlFor="claim-chat-input">Message the claim co-pilot</label>
+                <textarea id="claim-chat-input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} placeholder="Describe the product benefit or claim you want to explore..." maxLength={3000} required />
+                <button type="submit" aria-label="Send message" disabled={chatLoading || !chatInput.trim()}><Send aria-hidden="true" /></button>
+              </form>
+              <p className="fd-chat-foot">AI brainstorming is not legal advice. Claims need human review.</p>
+            </div>
+            {claim && <form className="fd-form fd-claim-review" onSubmit={submitClaim}>
               <label className="fd-field fd-claim-field">
                 <span className="fd-field-head"><span className="fd-field-label">Proposed claim</span><span className="fd-field-meta">{claim.length} / 180</span></span>
-                <textarea value={claim} onChange={(event) => setClaim(event.target.value)} placeholder="Write the exact copy you want to use..." maxLength={180} required />
+                <textarea value={claim} onChange={(event) => setClaim(event.target.value)} maxLength={500} required />
               </label>
               <fieldset className="fd-field fd-tier-field">
                 <legend className="fd-field-label">Target tier</legend>
@@ -259,8 +355,8 @@ export default function MarketingWorkspace() {
                 <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
               </label>
               <button className="fd-submit" type="submit" disabled={submitting}><span>{submitting ? "Sending draft..." : "Send draft for review"}</span><Send aria-hidden="true" /></button>
-              <p className="fd-form-foot">Your draft is saved with the study you selected.</p>
-            </form>
+              <p className="fd-form-foot">Review and edit the claim before sending it with the selected study.</p>
+            </form>}
           </section>
         </div>
         <footer className="fd-footer"><span>Claims Portal · Fieldnotes</span><span>Research informed · Copy ready</span></footer>

@@ -299,6 +299,24 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-claim-field textarea::placeholder { color: #aaa99d; font: italic 17px 'Newsreader', Georgia, serif; }
 .fd-email-field input { height: 40px; padding: 0 12px; }
 .fd-claim-field textarea:focus, .fd-email-field input:focus, .fd-select-wrap:focus-within { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
+.fd-chat { display: flex; flex-direction: column; gap: 10px; }
+.fd-chat-log { min-height: 245px; max-height: 390px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding: 12px; border: 1px solid var(--fd-line); border-radius: 13px; background: #f8f6f0; }
+.fd-chat-message { max-width: 92%; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 12px; }
+.fd-chat-message.is-assistant { align-self: flex-start; color: #36493d; background: #e8eee6; }
+.fd-chat-message.is-user { align-self: flex-end; color: white; background: var(--fd-green); }
+.fd-chat-message svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 2px; color: #66836d; }
+.fd-chat-message p { margin: 0; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
+.fd-chat-message.is-user p { color: inherit; }
+.fd-chat-compose { position: relative; }
+.fd-chat-compose textarea { width: 100%; min-height: 83px; resize: vertical; padding: 12px 49px 12px 13px; border: 1px solid var(--fd-line); border-radius: 12px; outline: 0; color: #313a34; background: #fffefa; font: 12px/1.5 'DM Sans', sans-serif; }
+.fd-chat-compose textarea:focus { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
+.fd-chat-compose textarea::placeholder { color: #99998f; }
+.fd-chat-compose button { width: 34px; height: 34px; position: absolute; right: 9px; bottom: 10px; display: grid; place-items: center; border: 0; border-radius: 9px; color: white; background: var(--fd-orange); }
+.fd-chat-compose button:disabled { opacity: .48; cursor: not-allowed; }
+.fd-chat-compose button svg { width: 15px; height: 15px; }
+.fd-chat-foot { margin: 0; color: #85877e; font-size: 9px; line-height: 1.45; }
+.fd-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
+.fd-claim-review { padding-top: 15px; border-top: 1px solid var(--fd-line); }
 .fd-tier-field legend { margin-bottom: 8px; }
 .fd-tier-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 4px; border-radius: 12px; background: #efe9da; }
 .fd-tier-options label { min-width: 0; min-height: 48px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-radius: 9px; color: #666b61; font-size: 10px; text-align: center; cursor: pointer; }
