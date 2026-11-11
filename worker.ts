@@ -24,7 +24,8 @@ Keep the proposed claim copy within 180 characters.
 `;
 
 const MAX_BODY_BYTES = 32_000;
-const MAX_MESSAGES = 24;
+const MAX_MESSAGES = 101;
+const MAX_CONTEXT_MESSAGES = 6;
 const MAX_MESSAGE_LENGTH = 3_000;
 const MAX_CONVERSATION_LENGTH = 16_000;
 
@@ -112,6 +113,7 @@ async function handleChat(request: Request, env: WorkerEnvironment): Promise<Res
 
   const messages = parseMessages(body.messages);
   if (messages instanceof Response) return messages;
+  const recentMessages = messages.slice(-MAX_CONTEXT_MESSAGES);
 
   let geminiResponse: Response;
   try {
@@ -125,7 +127,7 @@ async function handleChat(request: Request, env: WorkerEnvironment): Promise<Res
         },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: messages.map((message) => ({
+          contents: recentMessages.map((message) => ({
             role: message.role === "assistant" ? "model" : "user",
             parts: [{ text: message.content }],
           })),

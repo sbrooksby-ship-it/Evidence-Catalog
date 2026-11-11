@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   Activity,
-  BookOpen,
+  AlertCircle,
   CheckCircle2,
   ChevronDown,
+  Clock,
+  FileCheck2,
   Layers3,
   Link2,
-  PencilLine,
+  MessageSquare,
   Search,
   Send,
+  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -27,14 +30,106 @@ type Evidence = {
 };
 
 type ChatMessage = {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
 };
 
+type ClaimStatus = "pending" | "processing" | "completed" | "failed";
+
+type ClaimThread = {
+  id: string;
+  topic_title: string | null;
+  proposed_claim: string;
+  target_tier: string | null;
+  supporting_study: string | null;
+  work_email: string | null;
+  status: ClaimStatus;
+  ai_evaluation: string | null;
+  created_at: string;
+};
+
+type ClaimChatMessage = {
+  id: string;
+  submission_id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  created_at: string;
+};
+
+const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
+const CLAIM_CATEGORIES = ["Clinical Claims", "Substantiated Claims", "Indicative Claims", "Field Claims"] as const;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
   role: "assistant",
   content: "Share a product benefit or draft claim. I’ll help you workshop the wording and flag regulatory considerations.",
 };
+
+function claimCategory(tier: string | null): typeof CLAIM_CATEGORIES[number] {
+  if (tier === "T3") return "Clinical Claims";
+  if (tier === "T2") return "Substantiated Claims";
+  if (tier === "T1") return "Indicative Claims";
+  return "Field Claims";
+}
+
+function claimTopicTitle(claim: string): string {
+  const words = claim.trim().split(/\s+/).slice(0, 4);
+  const title = words.join(" ").replace(/[.,;:!?]+$/, "");
+  return title.length > 36 ? `${title.slice(0, 33).trimEnd()}...` : title;
+}
+
+function reportField(report: string, labels: string[]): string {
+  const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const match = report.match(new RegExp(`^\\s*(?:[-*]\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?(?:${escapedLabels})(?:\\*\\*)?\\s*:?\\s*(?:\\*\\*)?\\s*(.+)$`, "im"));
+  return match?.[1]?.replace(/\*\*/g, "").trim() || "Not specified in audit report";
+}
+
+function reportUrls(report: string): string[] {
+  const urls = Array.from(report.matchAll(/https?:\/\/[^\s)<>"']+/g), ([url]) => url.replace(/[.,;]+$/, ""));
+  return Array.from(new Set(urls));
+}
+
+function parseClaimThread(value: unknown): ClaimThread | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.proposed_claim !== "string"
+    || typeof value.created_at !== "string"
+    || (value.status !== "pending" && value.status !== "processing" && value.status !== "completed" && value.status !== "failed")) {
+    return null;
+  }
+  return {
+    id: value.id,
+    topic_title: typeof value.topic_title === "string" ? value.topic_title : null,
+    proposed_claim: value.proposed_claim,
+    target_tier: typeof value.target_tier === "string" ? value.target_tier : null,
+    supporting_study: typeof value.supporting_study === "string" ? value.supporting_study : null,
+    work_email: typeof value.work_email === "string" ? value.work_email : null,
+    status: value.status,
+    ai_evaluation: typeof value.ai_evaluation === "string" ? value.ai_evaluation : null,
+    created_at: value.created_at,
+  };
+}
+
+function parseClaimChatMessage(value: unknown): ClaimChatMessage | null {
+  if (!isRecord(value)
+    || typeof value.id !== "string"
+    || typeof value.submission_id !== "string"
+    || typeof value.content !== "string"
+    || typeof value.created_at !== "string"
+    || (value.role !== "user" && value.role !== "assistant" && value.role !== "system")) {
+    return null;
+  }
+  return {
+    id: value.id,
+    submission_id: value.submission_id,
+    role: value.role,
+    content: value.content,
+    created_at: value.created_at,
+  };
+}
+
+function upsertClaimThread(threads: ClaimThread[], thread: ClaimThread): ClaimThread[] {
+  return [thread, ...threads.filter((item) => item.id !== thread.id)]
+    .sort((left, right) => right.created_at.localeCompare(left.created_at));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -57,37 +152,37 @@ const supabase: SupabaseClient | null = supabaseUrl && supabaseAnonKey
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-const studyCategory = (study: Evidence) => {
-  const type = (study.evidence_type ?? "").toLowerCase();
-  if (type.includes("clinical") || type.includes("trial")) return "Clinical";
-  if (type.includes("consumer") || type.includes("survey")) return "Consumer";
-  if (type.includes("lab") || type.includes("assay")) return "Lab";
-  return "Field";
-};
-
 export default function MarketingWorkspace() {
   const [studies, setStudies] = useState<Evidence[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [demoMode, setDemoMode] = useState(false);
   const [search, setSearch] = useState("");
-  const [studyFilter, setStudyFilter] = useState("All studies");
-  const [openFolder, setOpenFolder] = useState("Clinical");
+  const [claimFilter, setClaimFilter] = useState("All claims");
+  const [openFolder, setOpenFolder] = useState("Clinical Claims");
   const [claim, setClaim] = useState("");
   const [email, setEmail] = useState("");
+  const [supportingStudy, setSupportingStudy] = useState("");
   const [tier, setTier] = useState("T2");
   const [evidenceId, setEvidenceId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([INITIAL_CHAT_MESSAGE]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [claimThreads, setClaimThreads] = useState<ClaimThread[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(true);
+  const [activeThreadId, setActiveThreadId] = useState("main");
+  const [selectedClaimId, setSelectedClaimId] = useState("");
+  const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(new Set());
+  const [threadMessages, setThreadMessages] = useState<ClaimChatMessage[]>([]);
+  const [threadInput, setThreadInput] = useState("");
+  const [threadSending, setThreadSending] = useState(false);
+  const claimThreadsRef = useRef<ClaimThread[]>([]);
+  const activeThreadIdRef = useRef("main");
+  const unreadThreadIdsRef = useRef(new Set<string>());
 
   useEffect(() => {
     let active = true;
     async function loadStudies() {
       if (!supabase) {
         setStudies(SAMPLE_STUDIES);
-        setDemoMode(true);
-        setLoading(false);
         return;
       }
       const { data, error } = await supabase
@@ -98,35 +193,171 @@ export default function MarketingWorkspace() {
       if (!active) return;
       if (error || !data?.length) {
         setStudies(SAMPLE_STUDIES);
-        setDemoMode(true);
       } else {
         setStudies(data as Evidence[]);
-        setDemoMode(false);
       }
-      setLoading(false);
     }
     void loadStudies();
     return () => { active = false; };
   }, []);
 
-  const visibleStudies = useMemo(() => studies.filter((study) => {
-    const matchesText = `${study.title} ${study.evidence_type ?? ""} ${study.description ?? ""}`.toLowerCase().includes(search.toLowerCase());
-    const matchesType = studyFilter === "All studies" || studyCategory(study) === studyFilter;
-    return matchesText && matchesType;
-  }), [studies, search, studyFilter]);
+  useEffect(() => {
+    if (!supabase) {
+      setThreadsLoading(false);
+      return;
+    }
 
-  const evidenceTypes = useMemo(() => ["All studies", ...Array.from(new Set(studies.map(studyCategory)))], [studies]);
-  const groupedStudies = useMemo(() => {
-    const groups = new Map<string, Evidence[]>();
-    visibleStudies.forEach((study) => {
-      const category = studyCategory(study);
-      groups.set(category, [...(groups.get(category) ?? []), study]);
-    });
-    return Array.from(groups.entries());
-  }, [visibleStudies]);
+    const client = supabase;
+    let active = true;
+    const channel = client
+      .channel("claim-submissions-lifecycle")
+      .on("postgres_changes", { event: "*", schema: "public", table: "claim_submissions" }, (payload) => {
+        if (!active) return;
+        if (payload.eventType === "DELETE") return;
+        const thread = parseClaimThread(payload.new);
+        if (!thread) return;
+
+        const previous = claimThreadsRef.current.find((item) => item.id === thread.id);
+        const nextThreads = upsertClaimThread(claimThreadsRef.current, thread);
+        claimThreadsRef.current = nextThreads;
+        setClaimThreads(nextThreads);
+
+        if (payload.eventType === "UPDATE" && thread.status === "completed" && previous?.status !== "completed") {
+          if (activeThreadIdRef.current !== thread.id && !unreadThreadIdsRef.current.has(thread.id)) {
+            const nextUnread = new Set(unreadThreadIdsRef.current);
+            nextUnread.add(thread.id);
+            unreadThreadIdsRef.current = nextUnread;
+            setUnreadThreadIds(nextUnread);
+          }
+          toast.success(`Analysis complete: ${thread.topic_title || "Claim audit"}`);
+        }
+      })
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          toast.error("Live claim updates are unavailable", { description: "Refresh to check for audit updates." });
+        }
+      });
+
+    async function loadClaimThreads() {
+      const { data, error } = await client
+        .from("claim_submissions")
+        .select(CLAIM_THREAD_COLUMNS)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (!active) return;
+      if (error) {
+        setThreadsLoading(false);
+        toast.error("Could not load claim audits", { description: error.message });
+        return;
+      }
+
+      const loaded = (data ?? []).map(parseClaimThread).filter((thread): thread is ClaimThread => thread !== null);
+      const merged = new Map(loaded.map((thread) => [thread.id, thread]));
+      claimThreadsRef.current.forEach((thread) => merged.set(thread.id, thread));
+      const nextThreads = Array.from(merged.values()).sort((left, right) => right.created_at.localeCompare(left.created_at));
+      claimThreadsRef.current = nextThreads;
+      setClaimThreads(nextThreads);
+      setThreadsLoading(false);
+    }
+    void loadClaimThreads();
+
+    return () => {
+      active = false;
+      void client.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || activeThreadId === "main") {
+      setThreadMessages([]);
+      return;
+    }
+
+    const client = supabase;
+    let active = true;
+    const threadId = activeThreadId;
+    const channel = client
+      .channel(`claim-chat-${threadId}`)
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "claim_chat_messages",
+        filter: `submission_id=eq.${threadId}`,
+      }, (payload) => {
+        if (!active) return;
+        const message = parseClaimChatMessage(payload.new);
+        if (!message) return;
+        setThreadMessages((previous) => previous.some((item) => item.id === message.id)
+          ? previous
+          : [...previous, message].sort((left, right) => left.created_at.localeCompare(right.created_at)));
+      })
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR") {
+          toast.error("Live claim discussion updates are unavailable");
+        }
+      });
+
+    async function loadThreadMessages() {
+      const { data, error } = await client
+        .from("claim_chat_messages")
+        .select("id, submission_id, role, content, created_at")
+        .eq("submission_id", threadId)
+        .order("created_at", { ascending: true });
+      if (!active) return;
+      if (error) {
+        toast.error("Could not load claim discussion", { description: error.message });
+        return;
+      }
+      const loaded = (data ?? []).map(parseClaimChatMessage).filter((message): message is ClaimChatMessage => message !== null);
+      setThreadMessages((current) => {
+        const merged = new Map(loaded.map((message) => [message.id, message]));
+        current.forEach((message) => {
+          if (message.submission_id === threadId) merged.set(message.id, message);
+        });
+        return Array.from(merged.values()).sort((left, right) => left.created_at.localeCompare(right.created_at));
+      });
+    }
+    void loadThreadMessages();
+
+    return () => {
+      active = false;
+      void client.removeChannel(channel);
+    };
+  }, [activeThreadId]);
+
+  const visibleClaims = useMemo(() => claimThreads.filter((thread) => {
+    const matchesText = `${thread.topic_title ?? ""} ${thread.proposed_claim} ${thread.supporting_study ?? ""}`.toLowerCase().includes(search.toLowerCase());
+    const matchesCategory = claimFilter === "All claims" || claimCategory(thread.target_tier) === claimFilter;
+    return matchesText && matchesCategory;
+  }), [claimThreads, search, claimFilter]);
+
+  const groupedClaims = useMemo(() => CLAIM_CATEGORIES.map((category) => [
+    category,
+    visibleClaims.filter((thread) => claimCategory(thread.target_tier) === category),
+  ] as const), [visibleClaims]);
+  const claimFilterOptions = ["All claims", ...CLAIM_CATEGORIES];
+  const selectedClaim = claimThreads.find((thread) => thread.id === selectedClaimId);
   const selectedStudy = studies.find((study) => study.id === evidenceId);
-  const typeCount = new Set(studies.map(studyCategory)).size;
+  const claimCategoryCount = new Set(claimThreads.map((thread) => claimCategory(thread.target_tier))).size;
+  const pendingClaimCount = claimThreads.filter((thread) => thread.status === "pending" || thread.status === "processing").length;
   const evidenceFit = selectedStudy?.fit_score ?? 68;
+
+  function selectThread(threadId: string) {
+    const changed = activeThreadIdRef.current !== threadId;
+    activeThreadIdRef.current = threadId;
+    setActiveThreadId(threadId);
+    setSelectedClaimId(threadId === "main" ? "" : threadId);
+    if (changed) {
+      setThreadMessages([]);
+      setThreadInput("");
+    }
+    if (threadId !== "main" && unreadThreadIdsRef.current.has(threadId)) {
+      const nextUnread = new Set(unreadThreadIdsRef.current);
+      nextUnread.delete(threadId);
+      unreadThreadIdsRef.current = nextUnread;
+      setUnreadThreadIds(nextUnread);
+    }
+  }
 
   async function sendChatMessage(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -185,7 +416,7 @@ export default function MarketingWorkspace() {
     }
   }
 
-  async function submitClaim(event: React.FormEvent<HTMLFormElement>) {
+  async function dispatchAudit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!claim.trim()) {
       toast.error("Add the campaign copy you want to submit.");
@@ -195,34 +426,140 @@ export default function MarketingWorkspace() {
       toast.error("Shorten the proposed claim to 180 characters or fewer.");
       return;
     }
-    if (!supabase || demoMode) {
-      toast.success("Demo draft ready", { description: "Connect Supabase to save this claim to your workspace." });
-      setClaim("");
-      setEmail("");
-      setTier("T2");
-      setEvidenceId("");
-      setChatMessages([INITIAL_CHAT_MESSAGE]);
+    if (!supabase) {
+      toast.error("Connect Supabase before dispatching an audit.");
       return;
     }
     setSubmitting(true);
-    const { error } = await supabase.from("claim_submissions").insert({
-      proposed_claim: claim.trim(),
-      target_tier: tier,
-      submitted_by: email.trim() || "Marketing team",
-      human_status: "Pending Review",
-      evidence_id: evidenceId || null,
-    });
-    setSubmitting(false);
+    const supportingStudyDetails = supportingStudy.trim() || (selectedStudy
+      ? [selectedStudy.title, selectedStudy.description].filter(Boolean).join(" — ")
+      : "");
+    try {
+      const { data, error } = await supabase
+        .from("claim_submissions")
+        .insert({
+          proposed_claim: claim.trim(),
+          topic_title: claimTopicTitle(claim),
+          target_tier: tier,
+          supporting_study: supportingStudyDetails || null,
+          work_email: email.trim() || null,
+          status: "pending",
+        })
+        .select(CLAIM_THREAD_COLUMNS)
+        .single();
+      if (error) {
+        toast.error("The audit could not be dispatched", { description: error.message });
+        return;
+      }
+      const newThread = parseClaimThread(data);
+      if (!newThread) {
+        toast.error("The audit was created, but its details could not be read. Refresh the workspace.");
+        return;
+      }
+      const nextThreads = upsertClaimThread(claimThreadsRef.current, newThread);
+      claimThreadsRef.current = nextThreads;
+      setClaimThreads(nextThreads);
+      toast.success("Deep audit dispatched", {
+        description: `${newThread.topic_title} is running in the background. You can keep brainstorming.`,
+      });
+      setClaim("");
+      setEmail("");
+      setSupportingStudy("");
+      setTier("T2");
+      setEvidenceId("");
+    } catch (error) {
+      toast.error("The audit could not be dispatched", {
+        description: error instanceof Error ? error.message : "Check your connection and try again.",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function sendThreadMessage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const submissionId = activeThreadIdRef.current;
+    const content = threadInput.trim();
+    if (!content || !supabase || submissionId === "main" || threadSending) return;
+
+    setThreadInput("");
+    setThreadSending(true);
+    const { data, error } = await supabase
+      .from("claim_chat_messages")
+      .insert({ submission_id: submissionId, role: "user", content })
+      .select("id, submission_id, role, content, created_at")
+      .single();
     if (error) {
-      toast.error("Your draft could not be submitted", { description: error.message });
+      setThreadInput(content);
+      setThreadSending(false);
+      toast.error("Your discussion message could not be saved", { description: error.message });
       return;
     }
-    toast.success("Draft added", { description: "Your claim is ready for the next review step." });
-    setClaim("");
-    setEmail("");
-    setTier("T2");
-    setEvidenceId("");
-    setChatMessages([INITIAL_CHAT_MESSAGE]);
+
+    const savedUserMessage = parseClaimChatMessage(data);
+    if (savedUserMessage && activeThreadIdRef.current === submissionId) {
+      setThreadMessages((previous) => previous.some((item) => item.id === savedUserMessage.id)
+        ? previous
+        : [...previous, savedUserMessage].sort((left, right) => left.created_at.localeCompare(right.created_at)));
+    }
+
+    try {
+      const thread = claimThreadsRef.current.find((item) => item.id === submissionId);
+      const context = thread
+        ? `Audited claim: ${thread.proposed_claim}\nAudit findings: ${(thread.ai_evaluation || "The audit is still processing.").slice(0, 4000)}`
+        : "The audit details are not currently available.";
+      const previousMessages: ChatMessage[] = threadMessages
+        .filter((message) => message.role === "user" || message.role === "assistant")
+        .slice(-4)
+        .map(({ role, content: messageContent }) => ({ role, content: messageContent.slice(-1000) }));
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            ...previousMessages,
+            { role: "user", content: `${context}\n\nFollow-up: ${content}` },
+          ],
+        }),
+      });
+
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error("The chat service returned an unreadable response.");
+      }
+      if (!isRecord(payload) || typeof payload.reply !== "string") {
+        throw new Error(isRecord(payload) && typeof payload.error === "string" ? payload.error : "The chat service did not return a reply.");
+      }
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "The chat request failed.");
+      }
+
+      const assistantContent = payload.reply.replace(/\s*\[AUDIT_READY:\s*[^\]]+\]\s*$/, "").trim();
+      if (!assistantContent) return;
+      const { data: assistantData, error: assistantError } = await supabase
+        .from("claim_chat_messages")
+        .insert({ submission_id: submissionId, role: "assistant", content: assistantContent })
+        .select("id, submission_id, role, content, created_at")
+        .single();
+      if (assistantError) {
+        toast.error("The reply was generated but could not be saved", { description: assistantError.message });
+        return;
+      }
+      const savedAssistantMessage = parseClaimChatMessage(assistantData);
+      if (savedAssistantMessage && activeThreadIdRef.current === submissionId) {
+        setThreadMessages((previous) => previous.some((item) => item.id === savedAssistantMessage.id)
+          ? previous
+          : [...previous, savedAssistantMessage].sort((left, right) => left.created_at.localeCompare(right.created_at)));
+      }
+    } catch (error) {
+      toast.error("Could not generate a claim discussion reply", {
+        description: error instanceof Error ? error.message : "The user message was saved; try again for a reply.",
+      });
+    } finally {
+      setThreadSending(false);
+    }
   }
 
   return (
@@ -234,13 +571,28 @@ export default function MarketingWorkspace() {
         </div>
         <div className="fd-sidebar-label">Workspace</div>
         <nav className="fd-nav" aria-label="Workspace navigation">
-          <button className="fd-nav-item is-active" type="button" aria-current="page">
-            <BookOpen aria-hidden="true" /><span>Marketing desk</span><span className="fd-nav-count">{loading ? "—" : studies.length}</span>
+          <button className={`fd-nav-item${activeThreadId === "main" ? " is-active" : ""}`} type="button" onClick={() => selectThread("main")} aria-current={activeThreadId === "main" ? "page" : undefined}>
+            <Sparkles aria-hidden="true" /><span>Compliance Co-Pilot</span><span className="fd-nav-count">Live</span>
           </button>
-          <button className="fd-nav-item" type="button" disabled><PencilLine aria-hidden="true" /><span>My drafts</span></button>
-          <button className="fd-nav-item" type="button" disabled><CheckCircle2 aria-hidden="true" /><span>Approved claims</span></button>
         </nav>
-        <aside className="fd-tip"><span>Tip</span><p>Tier 3 claims need a clinical or lab study with a sample above 100.</p></aside>
+        <section className="fd-thread-section" aria-label="Deep audit threads">
+          <div className="fd-thread-heading"><span>Deep audits</span><span>{threadsLoading ? "—" : claimThreads.length}</span></div>
+          <div className="fd-thread-list">
+            {threadsLoading && <p className="fd-thread-empty">Loading audit threads…</p>}
+            {!threadsLoading && claimThreads.length === 0 && <p className="fd-thread-empty">Dispatched audits will appear here.</p>}
+            {claimThreads.map((thread) => {
+              const isSelected = activeThreadId === thread.id;
+              const hasUnread = unreadThreadIds.has(thread.id);
+              const isProcessing = thread.status === "pending" || thread.status === "processing";
+              return <button key={thread.id} className={`fd-thread-item${isSelected ? " is-active" : ""}`} type="button" onClick={() => selectThread(thread.id)} aria-current={isSelected ? "page" : undefined}>
+                {isProcessing ? <Clock className="is-spinning" aria-label="Audit in progress" /> : thread.status === "failed" ? <AlertCircle aria-label="Audit failed" /> : <FileCheck2 aria-label="Audit complete" />}
+                <span className="fd-thread-copy"><strong>{thread.topic_title || "Claim audit"}</strong><small>{thread.status}</small></span>
+                {hasUnread && <span className="fd-unread-badge" aria-label="New audit result">1</span>}
+              </button>;
+            })}
+          </div>
+        </section>
+        <aside className="fd-tip"><span>Review note</span><p>AI audit results are a starting point. Have every claim reviewed by your team.</p></aside>
       </aside>
 
       <main className="fd-main">
@@ -259,55 +611,95 @@ export default function MarketingWorkspace() {
 
         <section className="fd-stats" aria-label="Workspace overview">
           <div className="fd-stat">
-            <div className="fd-metric-label">Available studies <BookOpen aria-hidden="true" /></div>
-            <div className="fd-metric-line"><span className="fd-metric-value">{loading ? "—" : studies.length.toString().padStart(2, "0")}</span><span>active</span></div>
-            <div className="fd-metric-track"><i style={{ width: studies.length ? "72%" : "0%" }} /></div>
-            <p className="fd-metric-caption">Active research, ready to support your copy</p>
+            <div className="fd-metric-label">Claim audits <FileCheck2 aria-hidden="true" /></div>
+            <div className="fd-metric-line"><span className="fd-metric-value">{threadsLoading ? "—" : claimThreads.length.toString().padStart(2, "0")}</span><span>submitted</span></div>
+            <div className="fd-metric-track"><i style={{ width: claimThreads.length ? `${Math.min(claimThreads.length / 10, 1) * 100}%` : "0%" }} /></div>
+            <p className="fd-metric-caption">Audits and dossiers in this workspace</p>
           </div>
           <div className="fd-stat">
-            <div className="fd-metric-label">Evidence types <Layers3 aria-hidden="true" /></div>
-            <div className="fd-metric-line"><span className="fd-metric-value">{loading ? "—" : typeCount.toString().padStart(2, "0")}</span><span>categories</span></div>
-            <div className="fd-metric-track"><i style={{ width: typeCount ? `${Math.min(typeCount / 4, 1) * 100}%` : "0%" }} /></div>
-            <p className="fd-metric-caption">{evidenceTypes.slice(1).join(" · ") || "Study types appear here"}</p>
+            <div className="fd-metric-label">Claim tiers <Layers3 aria-hidden="true" /></div>
+            <div className="fd-metric-line"><span className="fd-metric-value">{threadsLoading ? "—" : claimCategoryCount.toString().padStart(2, "0")}</span><span>categories</span></div>
+            <div className="fd-metric-track"><i style={{ width: claimCategoryCount ? `${Math.min(claimCategoryCount / 4, 1) * 100}%` : "0%" }} /></div>
+            <p className="fd-metric-caption">Clinical · Substantiated · Indicative · Field</p>
           </div>
           <div className="fd-stat fd-stat-featured">
-            <div className="fd-metric-label">Drafting status <Activity aria-hidden="true" /></div>
-            <div className="fd-featured-line">In motion</div>
+            <div className="fd-metric-label">Background reviews <Activity aria-hidden="true" /></div>
+            <div className="fd-featured-line">{pendingClaimCount ? `${pendingClaimCount} running` : "In motion"}</div>
             <div className="fd-activity-bars" aria-hidden="true"><i /><i /><i /><i /><i /><i /><i /></div>
-            <p className="fd-metric-caption">Ready when you are</p>
+            <p className="fd-metric-caption">Keep brainstorming while audits run</p>
           </div>
         </section>
 
         <div className="fd-content-grid">
           <section className="fd-panel fd-library" aria-labelledby="library-heading">
-            <div className="fd-section-head"><div><h2 id="library-heading">Research library</h2><p>Active studies available to support your copy.</p></div><span className="fd-results">{visibleStudies.length} {demoMode ? "sample " : ""}results</span></div>
-            <label className="fd-search"><Search aria-hidden="true" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search studies, outcomes, authors..." aria-label="Search studies, outcomes, or authors" /></label>
-            <div className="fd-filters" role="group" aria-label="Filter studies by category">
-              {evidenceTypes.map((type) => <button className={studyFilter === type ? "selected" : ""} type="button" key={type} onClick={() => setStudyFilter(type)} aria-pressed={studyFilter === type}>{type}</button>)}
+            <div className="fd-section-head"><div><h2 id="library-heading">Claim dossiers</h2><p>Audits grouped by target tier, with live status updates.</p></div><span className="fd-results">{visibleClaims.length} {visibleClaims.length === 1 ? "claim" : "claims"}</span></div>
+            <label className="fd-search"><Search aria-hidden="true" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search claims, studies, and reports..." aria-label="Search claims, supporting studies, and reports" /></label>
+            <div className="fd-filters" role="group" aria-label="Filter claims by tier">
+              {claimFilterOptions.map((category) => <button className={claimFilter === category ? "selected" : ""} type="button" key={category} onClick={() => setClaimFilter(category)} aria-pressed={claimFilter === category}>{category}</button>)}
             </div>
             <div className="fd-folder-grid">
-              {loading && <div className="fd-message">Loading the research library...</div>}
-              {!loading && visibleStudies.length === 0 && <div className="fd-message">No active studies match this search.</div>}
-              {!loading && groupedStudies.map(([category, categoryStudies]) => {
+              {threadsLoading && <div className="fd-message">Loading claim audits…</div>}
+              {!threadsLoading && claimThreads.length === 0 && <div className="fd-message">Your dispatched claim audits will appear here.</div>}
+              {!threadsLoading && claimThreads.length > 0 && visibleClaims.length === 0 && <div className="fd-message">No claim audits match this search.</div>}
+              {!threadsLoading && visibleClaims.length > 0 && groupedClaims.map(([category, categoryClaims]) => {
                 const isOpen = openFolder === category;
-                const files = categoryStudies.map((study) => ({
-                  id: study.id,
-                  title: study.title,
-                  meta: study.description || study.evidence_type || "Active study",
-                  fitScore: study.fit_score ?? 68,
+                const files = categoryClaims.map((thread) => ({
+                  id: thread.id,
+                  title: thread.topic_title || thread.proposed_claim,
+                  meta: `${thread.status} · ${thread.target_tier || "No tier"}`,
+                  fitScore: thread.status === "completed" ? 1 : 0,
                 }));
                 return <div className="fd-folder-cell" data-open={isOpen || undefined} key={category}>
                 <GlassEvidenceFolder
                   category={category}
+                  itemLabel="claim"
                   files={files}
-                  selectedId={evidenceId}
-                  onSelect={(id) => setEvidenceId(evidenceId === id ? "" : id)}
+                  selectedId={selectedClaimId}
+                  onSelect={(id) => selectThread(id)}
                   open={isOpen}
                   onOpenChange={(next) => setOpenFolder(next ? category : "")}
                 />
               </div>;
               })}
             </div>
+            {selectedClaim && <section className="fd-dossier" aria-labelledby="dossier-heading">
+              <div className="fd-dossier-header">
+                <div><span className="fd-field-label">Claim dossier</span><h3 id="dossier-heading">{selectedClaim.topic_title || "Audited claim"}</h3></div>
+                <span className={`fd-status-pill is-${selectedClaim.status}`}>{selectedClaim.status === "pending" || selectedClaim.status === "processing" ? <Clock aria-hidden="true" /> : selectedClaim.status === "failed" ? <AlertCircle aria-hidden="true" /> : <CheckCircle2 aria-hidden="true" />}{selectedClaim.status}</span>
+              </div>
+              <dl className="fd-dossier-properties">
+                <div><dt>Category</dt><dd>{claimCategory(selectedClaim.target_tier)}{selectedClaim.target_tier ? ` · ${selectedClaim.target_tier}` : ""}</dd></div>
+                <div><dt>Audited claim copy</dt><dd className="fd-dossier-claim">{selectedClaim.proposed_claim}</dd></div>
+                <div><dt>Supporting studies & URLs</dt><dd>
+                  {selectedClaim.supporting_study || "No supporting study was linked directly."}
+                  {reportUrls(`${selectedClaim.supporting_study ?? ""}\n${selectedClaim.ai_evaluation ?? ""}`).map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">{url}</a>)}
+                </dd></div>
+                <div><dt>Study design</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Study design"])}</dd></div>
+                <div><dt>Sample size (n)</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Sample size", "Sample size (n)"])}</dd></div>
+                <div><dt>Documented clinical outcomes</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Documented clinical outcomes", "Clinical outcomes"])}</dd></div>
+                <div><dt>Regulatory risk</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Regulatory risk", "Risk level"])}</dd></div>
+                <div><dt>Confidence level</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Confidence level", "Confidence"])}</dd></div>
+              </dl>
+              <div className="fd-dossier-report">
+                <h4><ShieldAlert aria-hidden="true" /> Regulatory assessment</h4>
+                {selectedClaim.ai_evaluation
+                  ? <p>{selectedClaim.ai_evaluation}</p>
+                  : <p className="is-pending">{selectedClaim.status === "failed" ? "The background audit failed. Check the worker logs before retrying." : "The background worker is researching this claim. Findings will appear here when the audit completes."}</p>}
+              </div>
+              <div className="fd-dossier-chat">
+                <div className="fd-dossier-chat-heading"><h4><MessageSquare aria-hidden="true" /> Follow-up discussion</h4><span>{threadMessages.length} messages</span></div>
+                <div className="fd-dossier-chat-log" role="log" aria-live="polite" aria-label="Claim audit discussion">
+                  {threadMessages.length === 0 && <p className="fd-thread-empty">Ask the Claims Researcher to clarify a finding or suggest a revision.</p>}
+                  {threadMessages.map((message) => <div key={message.id} className={`fd-dossier-message${message.role === "user" ? " is-user" : ""}`}><span>{message.role === "user" ? "You" : "Claims Researcher"}</span><p>{message.content}</p></div>)}
+                  {threadSending && <p className="fd-thread-empty" role="status">Preparing a reply…</p>}
+                </div>
+                <form className="fd-thread-compose" onSubmit={sendThreadMessage}>
+                  <label className="fd-sr-only" htmlFor="claim-thread-input">Message Claims Researcher</label>
+                  <textarea id="claim-thread-input" value={threadInput} onChange={(event) => setThreadInput(event.target.value)} maxLength={3000} placeholder="Ask a question about this audit…" required />
+                  <button type="submit" disabled={threadSending || !threadInput.trim() || !supabase} aria-label="Send discussion message"><Send aria-hidden="true" /></button>
+                </form>
+              </div>
+            </section>}
           </section>
 
           <section className="fd-panel fd-draft" aria-labelledby="draft-heading">
@@ -327,10 +719,10 @@ export default function MarketingWorkspace() {
               </form>
               <p className="fd-chat-foot">AI brainstorming is not legal advice. Claims need human review.</p>
             </div>
-            {claim && <form className="fd-form fd-claim-review" onSubmit={submitClaim}>
+            {claim && <form className="fd-form fd-claim-review" onSubmit={dispatchAudit}>
               <label className="fd-field fd-claim-field">
                 <span className="fd-field-head"><span className="fd-field-label">Proposed claim</span><span className="fd-field-meta">{claim.length} / 180</span></span>
-                <textarea value={claim} onChange={(event) => setClaim(event.target.value)} maxLength={500} required />
+                <textarea value={claim} onChange={(event) => setClaim(event.target.value)} maxLength={180} required />
               </label>
               <fieldset className="fd-field fd-tier-field">
                 <legend className="fd-field-label">Target tier</legend>
@@ -342,7 +734,7 @@ export default function MarketingWorkspace() {
                 </div>
               </fieldset>
               <label className="fd-field">
-                <span className="fd-field-label">Supporting study</span>
+                <span className="fd-field-label">Choose a study from your library</span>
                 <span className="fd-select-wrap"><Link2 aria-hidden="true" /><select value={evidenceId} onChange={(event) => setEvidenceId(event.target.value)}><option value="">Pick a study from the library to link it.</option>{studies.map((study) => <option key={study.id} value={study.id}>{study.title}</option>)}</select><ChevronDown aria-hidden="true" /></span>
               </label>
               <div className="fd-evidence-fit" aria-live="polite">
@@ -350,12 +742,16 @@ export default function MarketingWorkspace() {
                 {selectedStudy && <p>{selectedStudy.title}</p>}
                 <span className="fd-fit-score">{selectedStudy ? evidenceFit : "—"}</span>
               </div>
+              <label className="fd-field fd-supporting-field">
+                <span className="fd-field-head"><span className="fd-field-label">Study details or URL</span><span className="fd-field-meta">Optional</span></span>
+                <input type="text" value={supportingStudy} onChange={(event) => setSupportingStudy(event.target.value)} placeholder="Add a paper link or specific study details" />
+              </label>
               <label className="fd-field fd-email-field">
                 <span className="fd-field-head"><span className="fd-field-label">Work email</span><span className="fd-field-meta">Optional</span></span>
                 <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
               </label>
-              <button className="fd-submit" type="submit" disabled={submitting}><span>{submitting ? "Sending draft..." : "Send draft for review"}</span><Send aria-hidden="true" /></button>
-              <p className="fd-form-foot">Review and edit the claim before sending it with the selected study.</p>
+              <button className="fd-submit" type="submit" disabled={submitting || !supabase}><span>{submitting ? "Dispatching audit..." : "Dispatch deep audit"}</span><Send aria-hidden="true" /></button>
+              <p className="fd-form-foot">{supabase ? "Your audit runs in the background while you keep brainstorming." : "Connect Supabase to dispatch and track claim audits."}</p>
             </form>}
           </section>
         </div>

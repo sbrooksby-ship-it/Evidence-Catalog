@@ -13,6 +13,7 @@ export type GlassFolderFile = {
 type GlassEvidenceFolderProps = {
   files: GlassFolderFile[];
   category: string;
+  itemLabel?: string;
   selectedId: string;
   onSelect: (id: string) => void;
   open: boolean;
@@ -23,10 +24,19 @@ type GlassEvidenceFolderProps = {
 const BACK_PATH = "M0 56A22 22 0 0 1 22 34L146 34C170 34 172 0 198 0L318 0A22 22 0 0 1 340 22L340 250A22 22 0 0 1 318 272L22 272A22 22 0 0 1 0 250Z";
 const FRONT_PATH = "M0 22A22 22 0 0 1 22 0L118 0C144 0 146 32 172 32L318 32A22 22 0 0 1 340 54L340 176A22 22 0 0 1 318 198L22 198A22 22 0 0 1 0 176Z";
 
-const categoryCodes: Record<string, string> = { Clinical: "CLI", Consumer: "CON", Lab: "LAB", Field: "FIE" };
+const categoryCodes: Record<string, string> = {
+  Clinical: "CLI",
+  Consumer: "CON",
+  Lab: "LAB",
+  Field: "FIE",
+  "Clinical Claims": "T3",
+  "Substantiated Claims": "T2",
+  "Indicative Claims": "T1",
+  "Field Claims": "OTH",
+};
 const FAN_COUNT = 4;
 
-export default function GlassEvidenceFolder({ files, category, selectedId, onSelect, open, onOpenChange, width = 240 }: GlassEvidenceFolderProps) {
+export default function GlassEvidenceFolder({ files, category, itemLabel = "study", selectedId, onSelect, open, onOpenChange, width = 240 }: GlassEvidenceFolderProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [entered, setEntered] = useState(false);
   const scale = width / 340;
@@ -112,15 +122,15 @@ export default function GlassEvidenceFolder({ files, category, selectedId, onSel
           <div className="gf-back" style={{ clipPath: `path('${BACK_PATH}')` }} aria-hidden="true"><div className="gf-art" /><div className="gf-back-sheen" /></div>
           <svg className="gf-rim gf-back-rim" viewBox="0 0 340 272" aria-hidden="true"><path d={BACK_PATH} /></svg>
 
-          <div className="gf-files" aria-label={`${category} study files`}>
+          <div className="gf-files" aria-label={`${category} ${itemLabel} files`}>
             {fanFiles.map((file, index) => {
               const isSelected = file.id === selectedId;
               const slot = fanFiles.length < 2 ? 0 : (index / (fanFiles.length - 1)) * 2 - 1;
-              return <button key={file.id} type="button" className={`gf-sheet${isSelected ? " is-selected" : ""}`} style={{ "--gf-slot": slot, "--gf-depth": fanFiles.length - index - 1, zIndex: index + 1 } as React.CSSProperties} onClick={() => onSelect(file.id)} aria-pressed={isSelected} aria-label={`Select ${file.title} as supporting evidence`}>
+              return <button key={file.id} type="button" className={`gf-sheet${isSelected ? " is-selected" : ""}`} style={{ "--gf-slot": slot, "--gf-depth": fanFiles.length - index - 1, zIndex: index + 1 } as React.CSSProperties} onClick={() => onSelect(file.id)} aria-pressed={isSelected} aria-label={`Open ${file.title} ${itemLabel} dossier`}>
                 <span className="gf-sheet-head"><FileText aria-hidden="true" /><span className="gf-sheet-name">{file.title}</span></span>
                 <span className="gf-sheet-meta">{file.meta}</span>
                 <span className="gf-sheet-lines" aria-hidden="true"><i /><i /><i /><i /><i /></span>
-                {isSelected && <span className="gf-sheet-selected"><Check aria-hidden="true" /> Linked to draft</span>}
+                {isSelected && <span className="gf-sheet-selected"><Check aria-hidden="true" /> Dossier selected</span>}
               </button>;
             })}
           </div>
@@ -130,16 +140,16 @@ export default function GlassEvidenceFolder({ files, category, selectedId, onSel
             <div className="gf-spec" aria-hidden="true" />
             <svg className="gf-rim gf-front-rim" viewBox="0 0 340 198" aria-hidden="true"><path d={FRONT_PATH} /></svg>
             <button className="gf-hit" type="button" aria-expanded={open} aria-label={`${open ? "Close" : "Open"} ${title} folder`} onClick={toggleOpen} />
-            <div className="gf-label"><span className="gf-title">{title}</span><span className="gf-meta">{files.length} {files.length === 1 ? "study" : "studies"} · {categoryCodes[category]}</span></div>
+            <div className="gf-label"><span className="gf-title">{title}</span><span className="gf-meta">{files.length} {files.length === 1 ? itemLabel : `${itemLabel}s`} · {categoryCodes[category] ?? "OTH"}</span></div>
           </div>
 
-          <button className={`gf-key gf-key-add${selectedFile ? " is-selected" : ""}`} type="button" disabled={!bestFile} aria-label={selectedFile ? "Unlink selected study from draft" : `Link strongest ${category} study`} onClick={() => bestFile && onSelect(selectedFile?.id ?? bestFile.id)}>
+          <button className={`gf-key gf-key-add${selectedFile ? " is-selected" : ""}`} type="button" disabled={!bestFile} aria-label={selectedFile ? `Open ${selectedFile.title} dossier` : `Open first ${category} ${itemLabel}`} onClick={() => bestFile && onSelect(selectedFile?.id ?? bestFile.id)}>
             {selectedFile ? <Check aria-hidden="true" /> : <Plus aria-hidden="true" />}
           </button>
         </div>
       </div>
-      {open && <div className="gf-open-list" aria-label={`${category} studies`}>
-        <div className="gf-list-heading"><strong>{category} research</strong><span>{files.length} {files.length === 1 ? "study" : "studies"}</span></div>
+      {open && <div className="gf-open-list" aria-label={`${category} ${itemLabel}s`}>
+        <div className="gf-list-heading"><strong>{category}</strong><span>{files.length} {files.length === 1 ? itemLabel : `${itemLabel}s`}</span></div>
         {files.map((file) => <button key={file.id} type="button" className={`gf-overflow-file${file.id === selectedId ? " is-selected" : ""}`} onClick={() => onSelect(file.id)} aria-pressed={file.id === selectedId}>
           <FileText aria-hidden="true" /><span><strong>{file.title}</strong><small>{file.meta}</small></span>{file.id === selectedId && <Check aria-label="Linked" />}
         </button>)}
