@@ -58,6 +58,8 @@ type ClaimChatMessage = {
 
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
 const CLAIM_CATEGORIES = ["Clinical Claims", "Substantiated Claims", "Indicative Claims", "Field Claims"] as const;
+const RECENT_THREAD_STORAGE_KEY = "claims-portal:recent-chats";
+const MAX_RECENT_THREADS = 10;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
   role: "assistant",
   content: "Hi, I’m Ivy. Share a product benefit or draft claim, and I’ll help workshop the wording and flag regulatory considerations.",
@@ -168,6 +170,8 @@ export default function MarketingWorkspace() {
   const [chatLoading, setChatLoading] = useState(false);
   const [claimThreads, setClaimThreads] = useState<ClaimThread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
+  const [recentThreadIds, setRecentThreadIds] = useState<string[]>([]);
+  const [recentThreadsInitialized, setRecentThreadsInitialized] = useState(false);
   const [activeThreadId, setActiveThreadId] = useState("main");
   const [selectedClaimId, setSelectedClaimId] = useState("");
   const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(new Set());
@@ -177,6 +181,41 @@ export default function MarketingWorkspace() {
   const claimThreadsRef = useRef<ClaimThread[]>([]);
   const activeThreadIdRef = useRef("main");
   const unreadThreadIdsRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (threadsLoading || recentThreadsInitialized) return;
+
+    try {
+      const saved = window.localStorage.getItem(RECENT_THREAD_STORAGE_KEY);
+      if (saved === null) {
+        setRecentThreadIds(claimThreads.slice(0, MAX_RECENT_THREADS).map((thread) => thread.id));
+      } else {
+        const parsed: unknown = JSON.parse(saved);
+        if (!Array.isArray(parsed) || !parsed.every((id) => typeof id === "string")) {
+          throw new Error("Recent chat history has an invalid format.");
+        }
+        const availableIds = new Set(claimThreads.map((thread) => thread.id));
+        setRecentThreadIds(parsed.filter((id: string) => availableIds.has(id)).slice(0, MAX_RECENT_THREADS));
+      }
+    } catch (error) {
+      toast.error("Could not load recent chats", {
+        description: error instanceof Error ? error.message : "Recent chat history is unavailable.",
+      });
+      setRecentThreadIds(claimThreads.slice(0, MAX_RECENT_THREADS).map((thread) => thread.id));
+    }
+    setRecentThreadsInitialized(true);
+  }, [claimThreads, recentThreadsInitialized, threadsLoading]);
+
+  useEffect(() => {
+    if (!recentThreadsInitialized) return;
+    try {
+      window.localStorage.setItem(RECENT_THREAD_STORAGE_KEY, JSON.stringify(recentThreadIds));
+    } catch (error) {
+      toast.error("Could not save recent chats", {
+        description: error instanceof Error ? error.message : "Recent chat history is unavailable.",
+      });
+    }
+  }, [recentThreadIds, recentThreadsInitialized]);
 
   useEffect(() => {
     let active = true;
@@ -221,6 +260,9 @@ export default function MarketingWorkspace() {
         const nextThreads = upsertClaimThread(claimThreadsRef.current, thread);
         claimThreadsRef.current = nextThreads;
         setClaimThreads(nextThreads);
+        if (!previous) {
+          setRecentThreadIds((current) => [thread.id, ...current.filter((id) => id !== thread.id)].slice(0, MAX_RECENT_THREADS));
+        }
 
         if (payload.eventType === "UPDATE" && thread.status === "completed" && previous?.status !== "completed") {
           if (activeThreadIdRef.current !== thread.id && !unreadThreadIdsRef.current.has(thread.id)) {
@@ -336,6 +378,9 @@ export default function MarketingWorkspace() {
     visibleClaims.filter((thread) => claimCategory(thread.target_tier) === category),
   ] as const), [visibleClaims]);
   const claimFilterOptions = ["All claims", ...CLAIM_CATEGORIES];
+  const recentThreads = recentThreadIds
+    .map((id) => claimThreads.find((thread) => thread.id === id))
+    .filter((thread): thread is ClaimThread => thread !== undefined);
   const selectedClaim = claimThreads.find((thread) => thread.id === selectedClaimId);
   const selectedStudy = studies.find((study) => study.id === evidenceId);
   const claimCategoryCount = new Set(claimThreads.map((thread) => claimCategory(thread.target_tier))).size;
@@ -347,6 +392,9 @@ export default function MarketingWorkspace() {
     activeThreadIdRef.current = threadId;
     setActiveThreadId(threadId);
     setSelectedClaimId(threadId === "main" ? "" : threadId);
+    if (threadId !== "main") {
+      setRecentThreadIds((current) => [threadId, ...current.filter((id) => id !== threadId)].slice(0, MAX_RECENT_THREADS));
+    }
     if (changed) {
       setThreadMessages([]);
       setThreadInput("");
@@ -459,6 +507,7 @@ export default function MarketingWorkspace() {
       const nextThreads = upsertClaimThread(claimThreadsRef.current, newThread);
       claimThreadsRef.current = nextThreads;
       setClaimThreads(nextThreads);
+      setRecentThreadIds((current) => [newThread.id, ...current.filter((id) => id !== newThread.id)].slice(0, MAX_RECENT_THREADS));
       toast.success("Deep audit dispatched", {
         description: `${newThread.topic_title} is running in the background. You can keep brainstorming.`,
       });
@@ -576,11 +625,17 @@ export default function MarketingWorkspace() {
           </button>
         </nav>
         <section className="fd-thread-section" aria-label="Deep audit threads">
-          <div className="fd-thread-heading"><span>Deep audits</span><span>{threadsLoading ? "—" : claimThreads.length}</span></div>
+          <div className="fd-thread-heading">
+            <span>Recent chats</span>
+            <div className="fd-thread-heading-actions">
+              <span>{threadsLoading ? "—" : `${recentThreads.length}/${MAX_RECENT_THREADS}`}</span>
+              <button type="button" onClick={() => setRecentThreadIds([])} disabled={recentThreads.length === 0} aria-label="Clear recent chats">Clear</button>
+            </div>
+          </div>
           <div className="fd-thread-list">
             {threadsLoading && <p className="fd-thread-empty">Loading audit threads…</p>}
-            {!threadsLoading && claimThreads.length === 0 && <p className="fd-thread-empty">Dispatched audits will appear here.</p>}
-            {claimThreads.map((thread) => {
+            {!threadsLoading && recentThreads.length === 0 && <p className="fd-thread-empty">No recent chats. Reopen one from the claim folders.</p>}
+            {recentThreads.map((thread) => {
               const isSelected = activeThreadId === thread.id;
               const hasUnread = unreadThreadIds.has(thread.id);
               const isProcessing = thread.status === "pending" || thread.status === "processing";
