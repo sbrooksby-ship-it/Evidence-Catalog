@@ -605,7 +605,7 @@ export default function MarketingWorkspace() {
           <h1 className="fd-hero-title">Good claims start<br />with <em>good evidence.</em></h1>
           <div className="fd-hero-aside">
             <p>Shape the claim. Find the research. Send your draft forward, with the proof already attached.</p>
-            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>2</b>Find a study</span><span><b>1</b>Write the claim</span><span><b>3</b>Send for review</span></div>
+            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>1</b>Write the claim</span><span><b>2</b>Find a study</span><span><b>3</b>Send for review</span></div>
           </div>
         </header>
 
