@@ -91,6 +91,29 @@ function extractReply(value: unknown): string | null {
   return isRecord(textPart) && typeof textPart.text === "string" ? textPart.text.trim() : null;
 }
 
+function extractGeminiError(value: unknown): string | null {
+  if (!isRecord(value) || !isRecord(value.error) || typeof value.error.message !== "string") {
+    return null;
+  }
+  return value.error.message.slice(0, 500);
+}
+
+function geminiChatError(status: number): string {
+  if (status === 401 || status === 403) {
+    return "Gemini rejected the API key or access. Check the Worker GEMINI_API_KEY and API permissions.";
+  }
+  if (status === 429) {
+    return "Gemini's rate limit or quota was reached. Check the API quota and try again later.";
+  }
+  if (status === 400 || status === 404) {
+    return "Gemini rejected the request. Check the model and request configuration.";
+  }
+  if (status >= 500) {
+    return "Gemini is temporarily unavailable. Please try again shortly.";
+  }
+  return "Gemini could not process this request. Please try again.";
+}
+
 function parseAuditClaim(value: unknown): AuditClaim | null {
   if (!isRecord(value)
     || typeof value.id !== "string"
@@ -188,7 +211,7 @@ Target Tier: "${claim.target_tier || "Not specified"}"
 Supporting Study Provided: "${claim.supporting_study || "None provided"}"`;
 
     const geminiResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
       {
         method: "POST",
         headers: {
@@ -335,8 +358,11 @@ async function handleChat(request: Request, env: WorkerEnvironment): Promise<Res
   }
 
   if (!geminiResponse.ok) {
-    console.error("Gemini chat request returned status", geminiResponse.status);
-    return jsonResponse({ error: "Gemini could not process this request. Please try again." }, 502);
+    console.error("Gemini chat request failed.", {
+      status: geminiResponse.status,
+      message: extractGeminiError(result),
+    });
+    return jsonResponse({ error: geminiChatError(geminiResponse.status) }, 502);
   }
 
   const reply = extractReply(result);
