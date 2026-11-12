@@ -604,8 +604,8 @@ export default function MarketingWorkspace() {
         <header className="fd-hero">
           <h1 className="fd-hero-title">Good claims start<br />with <em>good evidence.</em></h1>
           <div className="fd-hero-aside">
-            <p>Find the research. Shape the story. Send your draft forward, with the proof already attached.</p>
-            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>1</b>Find a study</span><span><b>2</b>Write the claim</span><span><b>3</b>Send for review</span></div>
+            <p>Shape the claim. Find the research. Send your draft forward, with the proof already attached.</p>
+            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>2</b>Find a study</span><span><b>1</b>Write the claim</span><span><b>3</b>Send for review</span></div>
           </div>
         </header>
 
@@ -632,7 +632,7 @@ export default function MarketingWorkspace() {
 
         <div className="fd-content-grid">
           <section className="fd-panel fd-library" aria-labelledby="library-heading">
-            <div className="fd-section-head"><div><h2 id="library-heading">Claim dossiers</h2><p>Audits grouped by target tier, with live status updates.</p></div><span className="fd-results">{visibleClaims.length} {visibleClaims.length === 1 ? "claim" : "claims"}</span></div>
+            <div className="fd-section-head"><div><h2 id="library-heading">Claim catalog</h2><p>Audits grouped by target tier, with live status updates.</p></div><span className="fd-results">{visibleClaims.length} {visibleClaims.length === 1 ? "claim" : "claims"}</span></div>
             <label className="fd-search"><Search aria-hidden="true" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search claims, studies, and reports..." aria-label="Search claims, supporting studies, and reports" /></label>
             <div className="fd-filters" role="group" aria-label="Filter claims by tier">
               {claimFilterOptions.map((category) => <button className={claimFilter === category ? "selected" : ""} type="button" key={category} onClick={() => setClaimFilter(category)} aria-pressed={claimFilter === category}>{category}</button>)}
