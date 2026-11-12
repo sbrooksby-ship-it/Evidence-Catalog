@@ -160,10 +160,18 @@ async function handleAudit(request: Request, env: WorkerEnvironment): Promise<Re
   }
 
   const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !supabaseKey || !env.GEMINI_API_KEY) {
-    console.error("Supabase or Gemini credentials are not configured for the audit Worker.");
-    return jsonResponse({ error: "The audit service is not configured." }, 500);
+    const missingConfig = [
+      !supabaseUrl ? "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL" : null,
+      !supabaseKey ? "SUPABASE_SERVICE_ROLE_KEY" : null,
+      !env.GEMINI_API_KEY ? "GEMINI_API_KEY" : null,
+    ].filter((name): name is string => name !== null);
+    console.error("Audit Worker is missing configuration:", missingConfig);
+    return jsonResponse({
+      error: "The audit service is not configured.",
+      missing: missingConfig,
+    }, 500);
   }
 
   const recordId = payload.record.id;
@@ -184,7 +192,10 @@ async function handleAudit(request: Request, env: WorkerEnvironment): Promise<Re
     });
     if (!claimResponse.ok) {
       console.error("Supabase could not claim audit record; status", claimResponse.status);
-      return jsonResponse({ error: "The audit could not be started. Please try again." }, 502);
+      return jsonResponse({
+        error: "Supabase rejected the audit status update.",
+        upstreamStatus: claimResponse.status,
+      }, 502);
     }
 
     claimed = true;
