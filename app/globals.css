@@ -162,10 +162,13 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-thread-heading { display: flex; justify-content: space-between; padding: 0 8px; color: #83a394; font: 10px 'DM Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
 .fd-thread-heading-actions > span { color: #bdcfc2; }
 .fd-thread-heading-actions { display: flex; align-items: center; gap: 9px; }
-.fd-thread-heading-actions button { padding: 0; border: 0; color: #bdcfc2; background: transparent; font: inherit; letter-spacing: inherit; text-transform: none; }
-.fd-thread-heading-actions button:hover:not(:disabled) { color: white; }
-.fd-thread-heading-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .fd-thread-list { min-height: 0; max-height: calc(100vh - 260px); display: flex; flex-direction: column; gap: 3px; overflow-y: auto; padding: 0 2px 0 0; scrollbar-color: #638272 transparent; scrollbar-width: thin; }
+.fd-thread-entry { min-width: 0; display: flex; align-items: center; gap: 2px; }
+.fd-thread-entry .fd-thread-item { flex: 1; width: auto; }
+.fd-thread-remove { width: 23px; height: 23px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: #9bb19f; background: transparent; }
+.fd-thread-remove svg { width: 13px; height: 13px; }
+.fd-thread-remove:hover { color: white; background: rgba(235, 243, 235, .13); }
+.fd-thread-remove:focus-visible { outline: 2px solid #bdcfc2; outline-offset: 1px; }
 .fd-thread-item { width: 100%; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 7px; border: 0; border-radius: 8px; color: #d1dcd4; background: transparent; text-align: left; }
 .fd-thread-item:hover, .fd-thread-item.is-active { color: white; background: rgba(235, 243, 235, .13); }
 .fd-thread-item > svg { width: 15px; height: 15px; flex: 0 0 auto; color: #9bb19f; }

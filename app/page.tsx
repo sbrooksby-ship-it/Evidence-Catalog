@@ -16,6 +16,7 @@ import {
   Send,
   ShieldAlert,
   Sparkles,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import GlassEvidenceFolder from "./components/glass-evidence-folder";
@@ -626,24 +627,29 @@ export default function MarketingWorkspace() {
         </nav>
         <section className="fd-thread-section" aria-label="Deep audit threads">
           <div className="fd-thread-heading">
-            <span>Recent chats</span>
+            <span>Recent claims</span>
             <div className="fd-thread-heading-actions">
               <span>{threadsLoading ? "—" : `${recentThreads.length}/${MAX_RECENT_THREADS}`}</span>
-              <button type="button" onClick={() => setRecentThreadIds([])} disabled={recentThreads.length === 0} aria-label="Clear recent chats">Clear</button>
             </div>
           </div>
           <div className="fd-thread-list">
             {threadsLoading && <p className="fd-thread-empty">Loading audit threads…</p>}
-            {!threadsLoading && recentThreads.length === 0 && <p className="fd-thread-empty">No recent chats. Reopen one from the claim folders.</p>}
+            {!threadsLoading && recentThreads.length === 0 && <p className="fd-thread-empty">No recent claims. Reopen one from the claim folders.</p>}
             {recentThreads.map((thread) => {
               const isSelected = activeThreadId === thread.id;
               const hasUnread = unreadThreadIds.has(thread.id);
               const isProcessing = thread.status === "pending" || thread.status === "processing";
-              return <button key={thread.id} className={`fd-thread-item${isSelected ? " is-active" : ""}`} type="button" onClick={() => selectThread(thread.id)} aria-current={isSelected ? "page" : undefined}>
-                {isProcessing ? <Clock className="is-spinning" aria-label="Audit in progress" /> : thread.status === "failed" ? <AlertCircle aria-label="Audit failed" /> : <FileCheck2 aria-label="Audit complete" />}
-                <span className="fd-thread-copy"><strong>{thread.topic_title || "Claim audit"}</strong><small>{thread.status}</small></span>
-                {hasUnread && <span className="fd-unread-badge" aria-label="New audit result">1</span>}
-              </button>;
+              const title = thread.topic_title || "Claim audit";
+              return <div key={thread.id} className="fd-thread-entry">
+                <button className={`fd-thread-item${isSelected ? " is-active" : ""}`} type="button" onClick={() => selectThread(thread.id)} aria-current={isSelected ? "page" : undefined}>
+                  {isProcessing ? <Clock className="is-spinning" aria-label="Audit in progress" /> : thread.status === "failed" ? <AlertCircle aria-label="Audit failed" /> : <FileCheck2 aria-label="Audit complete" />}
+                  <span className="fd-thread-copy"><strong>{title}</strong><small>{thread.status}</small></span>
+                  {hasUnread && <span className="fd-unread-badge" aria-label="New audit result">1</span>}
+                </button>
+                <button className="fd-thread-remove" type="button" onClick={() => setRecentThreadIds((current) => current.filter((id) => id !== thread.id))} aria-label={`Remove ${title} from recent claims`} title="Remove from recent claims">
+                  <X aria-hidden="true" />
+                </button>
+              </div>;
             })}
           </div>
         </section>
