@@ -3,6 +3,10 @@
   "name": "evidence-catalog-web",
   "main": "worker.ts",
   "compatibility_date": "2026-11-09",
+  "vars": {
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_a1_rYjzXDCpI9XfQk5ua-g_U8INER5k",
+    "NEXT_PUBLIC_SUPABASE_URL": "https://chvehhnkwamgdcbozuthv.supabase.co"
+  },
   "assets": {
     "directory": "./out",
     "binding": "ASSETS",
