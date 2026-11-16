@@ -63,7 +63,7 @@ const RECENT_THREAD_STORAGE_KEY = "claims-portal:recent-chats";
 const MAX_RECENT_THREADS = 10;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
   role: "assistant",
-  content: "Hi, I’m Ivy. Share a product benefit or draft claim, and I’ll help workshop the wording and find studies to help substantiate it.",
+  content: "Hi, I’m Ivy—I’ll help workshop the wording and find supporting studies to strengthen your product benefit or draft claim.",
 };
 
 function claimCategory(tier: string | null): typeof CLAIM_CATEGORIES[number] {
