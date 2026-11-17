@@ -710,7 +710,11 @@ async function gatherEvidenceContext(
     submitted_by?: string | null;
   },
   env: WorkerEnvironment,
-  options: { allowWebResearch?: boolean; timeoutMs?: number } = {},
+  options: {
+    allowWebResearch?: boolean;
+    timeoutMs?: number;
+    executionContext?: WorkerExecutionContext;
+  } = {},
 ): Promise<{
   context: string;
   source: EvidenceSource;
@@ -940,7 +944,7 @@ async function gatherEvidenceContext(
         ? await isStudyAlreadyStored(supabaseUrl, supabaseHeaders, explicitUrl)
         : null;
       if (alreadyStored === false && supabaseHeaders) {
-        await embedAndStoreStudy(
+        const storageTask = embedAndStoreStudy(
           env,
           supabaseHeaders,
           explicitUrl,
@@ -950,6 +954,13 @@ async function gatherEvidenceContext(
           splitStudyIntoChunks(scraped),
           { origin: "user_submitted_url" },
         );
+        if (options.executionContext) {
+          options.executionContext.waitUntil(storageTask.catch((error) => {
+            console.error("Background study indexing failed.", { sourceUrl: explicitUrl, error });
+          }));
+        } else {
+          await storageTask;
+        }
       }
     }
   }
@@ -1015,7 +1026,7 @@ async function gatherEvidenceContext(
             newStudies.push(`Title: ${title}\nSource: ${sourceUrl}\nContent:\n${promptExcerpt}`);
 
             if (alreadyStored === false && supabaseUrl && supabaseHeaders) {
-              await embedAndStoreStudy(
+              const storageTask = embedAndStoreStudy(
                 env,
                 supabaseHeaders,
                 sourceUrl,
@@ -1026,6 +1037,13 @@ async function gatherEvidenceContext(
                 { origin: "firecrawl_search", query_claim: submission.proposed_claim.slice(0, 500) },
                 submission.submitted_by,
               );
+              if (options.executionContext) {
+                options.executionContext.waitUntil(storageTask.catch((error) => {
+                  console.error("Background study indexing failed.", { sourceUrl, error });
+                }));
+              } else {
+                await storageTask;
+              }
             }
           }));
           if (newStudies.length > 0) {
@@ -1210,7 +1228,7 @@ async function processAudit(
       proposed_claim: claim.proposed_claim,
       topic_title: claim.topic_title,
       supporting_study: claim.supporting_study,
-    }, env);
+    }, env, { executionContext: ctx });
     console.info("Audit evidence context source:", evidenceSource);
     const prompt = `You are a senior dietary supplement & CPG regulatory compliance auditor (FDA 21 CFR 101.93 / DSHEA / FTC substantiation standards).
 Evaluate the following marketing claim proposal and return ONLY valid JSON with two keys:
