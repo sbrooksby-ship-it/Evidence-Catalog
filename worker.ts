@@ -1148,11 +1148,12 @@ async function handleAudit(
 
   const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseKey || !env.GEMINI_API_KEY) {
+  const geminiApiKey = env.GEMINI_API_KEY;
+  if (!supabaseUrl || !supabaseKey || !geminiApiKey) {
     const missingConfig = [
       !supabaseUrl ? "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL" : null,
       !supabaseKey ? "SUPABASE_SERVICE_ROLE_KEY" : null,
-      !env.GEMINI_API_KEY ? "GEMINI_API_KEY" : null,
+      !geminiApiKey ? "GEMINI_API_KEY" : null,
     ].filter((name): name is string => name !== null);
     console.error("Audit Worker is missing configuration:", missingConfig);
     return jsonResponse({
@@ -1162,6 +1163,18 @@ async function handleAudit(
   }
 
   const recordId = payload.record.id;
+  ctx.waitUntil(processAudit(recordId, env, ctx, supabaseUrl, supabaseKey, geminiApiKey));
+  return jsonResponse({ accepted: true, id: recordId }, 202);
+}
+
+async function processAudit(
+  recordId: string,
+  env: WorkerEnvironment,
+  ctx: WorkerExecutionContext,
+  supabaseUrl: string,
+  supabaseKey: string,
+  geminiApiKey: string,
+): Promise<void> {
   const supabaseHeaders = {
     apikey: supabaseKey,
     Authorization: `Bearer ${supabaseKey}`,
@@ -1179,16 +1192,15 @@ async function handleAudit(
     });
     if (!claimResponse.ok) {
       console.error("Supabase could not claim audit record; status", claimResponse.status);
-      return jsonResponse({
-        error: "Supabase rejected the audit status update.",
-        upstreamStatus: claimResponse.status,
-      }, 502);
+      return;
     }
 
     claimed = true;
     const claimRows: unknown = await claimResponse.json();
-    if (!Array.isArray(claimRows) || claimRows.length === 0) {
-      return Response.json({ ignored: true }, { headers: { "Cache-Control": "no-store" } });
+    if (!Array.isArray(claimRows)) throw new Error("Supabase returned an invalid audit claim response.");
+    if (claimRows.length === 0) {
+      claimed = false;
+      return;
     }
     const claim = parseAuditClaim(claimRows[0]);
     if (!claim) throw new Error("Supabase returned an invalid audit record.");
@@ -1223,7 +1235,7 @@ Evidence Context:\n${evidenceContext}`;
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": env.GEMINI_API_KEY,
+          "x-goog-api-key": geminiApiKey,
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
@@ -1233,8 +1245,8 @@ Evidence Context:\n${evidenceContext}`;
       },
     );
     if (!geminiResponse.ok) {
-      console.error("Gemini audit request returned status", geminiResponse.status);
-      throw new Error("Gemini could not process the audit.");
+      const errorBody = (await geminiResponse.text()).slice(0, 500);
+      throw new Error(`Gemini audit request failed (${geminiResponse.status}): ${errorBody}`);
     }
 
     const geminiData: unknown = await geminiResponse.json();
@@ -1259,37 +1271,44 @@ Evidence Context:\n${evidenceContext}`;
         status: "completed",
         topic_title: claim.topic_title || (typeof evaluation.topic_title === "string" ? evaluation.topic_title : "") || "Claim Audit",
         ai_evaluation: evaluation.ai_evaluation,
+        supporting_study: claim.supporting_study,
       }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!completeResponse.ok) {
       console.error("Supabase could not save audit results; status", completeResponse.status);
-      throw new Error("The audit results could not be saved.");
+      throw new Error(`Supabase could not save audit results (HTTP ${completeResponse.status}).`);
     }
     const completedRows: unknown = await completeResponse.json();
     if (!Array.isArray(completedRows) || completedRows.length === 0) {
-      return Response.json({ ignored: true }, { headers: { "Cache-Control": "no-store" } });
+      throw new Error("Supabase did not update the claim submission; it may no longer be processing.");
     }
-
-    return jsonResponse({ success: true, id: claim.id });
   } catch (error) {
     console.error("Audit processing failed.", error);
     if (claimed) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       try {
         const failedResponse = await fetch(auditRecordUrl(supabaseUrl, recordId, "processing"), {
           method: "PATCH",
-          headers: { ...supabaseHeaders, Prefer: "return=minimal" },
-          body: JSON.stringify({ status: "failed" }),
+          headers: supabaseHeaders,
+          body: JSON.stringify({
+            status: "failed",
+            ai_evaluation: `Audit failed: ${errorMessage}`.slice(0, 4_000),
+          }),
           signal: AbortSignal.timeout(15_000),
         });
         if (!failedResponse.ok) {
           console.error("Supabase could not mark audit as failed; status", failedResponse.status);
+        } else {
+          const failedRows: unknown = await failedResponse.json();
+          if (!Array.isArray(failedRows) || failedRows.length === 0) {
+            console.error("Supabase did not update the claim submission to failed.", recordId);
+          }
         }
       } catch (failureError) {
         console.error("Could not update failed audit status.", failureError);
       }
     }
-    return jsonResponse({ error: "The audit could not be completed. Please try again." }, 502);
   }
 }
 
