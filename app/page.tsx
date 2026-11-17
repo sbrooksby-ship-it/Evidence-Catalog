@@ -33,6 +33,10 @@ type Evidence = {
 type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
+  actionRequired?: "SEARCH_AND_AUDIT";
+  suggestedClaim?: string;
+  actionId?: string;
+  auditDispatched?: boolean;
 };
 
 type ClaimStatus = "pending" | "processing" | "completed" | "failed";
@@ -169,6 +173,7 @@ export default function MarketingWorkspace() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([INITIAL_CHAT_MESSAGE]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatAuditSubmittingId, setChatAuditSubmittingId] = useState<string | null>(null);
   const [claimThreads, setClaimThreads] = useState<ClaimThread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [recentThreadIds, setRecentThreadIds] = useState<string[]>([]);
@@ -388,6 +393,13 @@ export default function MarketingWorkspace() {
   const pendingClaimCount = claimThreads.filter((thread) => thread.status === "pending" || thread.status === "processing").length;
   const evidenceFit = selectedStudy?.fit_score ?? 68;
 
+  function trackClaimThread(thread: ClaimThread) {
+    const nextThreads = upsertClaimThread(claimThreadsRef.current, thread);
+    claimThreadsRef.current = nextThreads;
+    setClaimThreads(nextThreads);
+    setRecentThreadIds((current) => [thread.id, ...current.filter((id) => id !== thread.id)].slice(0, MAX_RECENT_THREADS));
+  }
+
   function selectThread(threadId: string) {
     const changed = activeThreadIdRef.current !== threadId;
     activeThreadIdRef.current = threadId;
@@ -452,6 +464,13 @@ export default function MarketingWorkspace() {
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: assistantContent || "This claim is ready to prepare for review.",
+        ...(payload.actionRequired === "SEARCH_AND_AUDIT" && typeof payload.suggestedClaim === "string"
+          ? {
+            actionRequired: "SEARCH_AND_AUDIT" as const,
+            suggestedClaim: payload.suggestedClaim,
+            actionId: crypto.randomUUID(),
+          }
+          : {}),
       };
       setChatMessages([...conversation, assistantMessage].slice(-20));
     } catch (error) {
@@ -462,6 +481,58 @@ export default function MarketingWorkspace() {
       });
     } finally {
       setChatLoading(false);
+    }
+  }
+
+  async function searchAndRunAudit(actionId: string, suggestedClaim: string) {
+    const proposedClaim = suggestedClaim.trim().replace(/\s+/g, " ");
+    if (!supabase) {
+      toast.error("Connect Supabase before dispatching an audit.");
+      return;
+    }
+    if (!proposedClaim || proposedClaim.length > 180) {
+      toast.error("The suggested claim must contain 1-180 characters before it can be audited.");
+      return;
+    }
+    if (chatAuditSubmittingId) return;
+
+    setChatAuditSubmittingId(actionId);
+    try {
+      const { data, error } = await supabase
+        .from("claim_submissions")
+        .insert({
+          proposed_claim: proposedClaim,
+          topic_title: claimTopicTitle(proposedClaim),
+          target_tier: "T2",
+          supporting_study: null,
+          work_email: null,
+          status: "pending",
+        })
+        .select(CLAIM_THREAD_COLUMNS)
+        .single();
+      if (error) {
+        toast.error("The online search and audit could not be dispatched", { description: error.message });
+        return;
+      }
+
+      setChatMessages((current) => current.map((message) => message.actionId === actionId
+        ? { ...message, auditDispatched: true }
+        : message));
+      const newThread = parseClaimThread(data);
+      if (!newThread) {
+        toast.error("The audit was created, but its details could not be read. Refresh the workspace.");
+        return;
+      }
+      trackClaimThread(newThread);
+      toast.success("Online search and audit dispatched", {
+        description: `${newThread.topic_title} is researching in the background.`,
+      });
+    } catch (error) {
+      toast.error("The online search and audit could not be dispatched", {
+        description: error instanceof Error ? error.message : "Check your connection and try again.",
+      });
+    } finally {
+      setChatAuditSubmittingId(null);
     }
   }
 
@@ -505,10 +576,7 @@ export default function MarketingWorkspace() {
         toast.error("The audit was created, but its details could not be read. Refresh the workspace.");
         return;
       }
-      const nextThreads = upsertClaimThread(claimThreadsRef.current, newThread);
-      claimThreadsRef.current = nextThreads;
-      setClaimThreads(nextThreads);
-      setRecentThreadIds((current) => [newThread.id, ...current.filter((id) => id !== newThread.id)].slice(0, MAX_RECENT_THREADS));
+      trackClaimThread(newThread);
       toast.success("Deep audit dispatched", {
         description: `${newThread.topic_title} is running in the background. You can keep brainstorming.`,
       });
@@ -767,9 +835,25 @@ export default function MarketingWorkspace() {
             <div className="fd-section-head"><div><h2 id="draft-heading">Workshop a claim</h2><p>Talk through your idea, then prepare a claim for review.</p></div></div>
             <div className="fd-chat">
               <div className="fd-chat-log" role="log" aria-live="polite" aria-label="Claim workshop conversation">
-                {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}`} key={`${index}-${message.role}`}>
+                {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}${message.actionRequired ? " has-action" : ""}`} key={message.actionId ?? `${index}-${message.role}`}>
                   {message.role === "assistant" && <Sparkles aria-hidden="true" />}
                   <p>{message.content}</p>
+                  {message.actionRequired === "SEARCH_AND_AUDIT" && message.suggestedClaim && message.actionId && <button
+                    className="fd-chat-action"
+                    type="button"
+                    disabled={!supabase || chatAuditSubmittingId !== null || message.auditDispatched}
+                    onClick={() => {
+                      if (message.actionId && message.suggestedClaim) {
+                        void searchAndRunAudit(message.actionId, message.suggestedClaim);
+                      }
+                    }}
+                  >
+                    {message.auditDispatched
+                      ? "Audit submitted"
+                      : chatAuditSubmittingId === message.actionId
+                        ? "Submitting..."
+                        : <><Search aria-hidden="true" />Search Online &amp; Run Audit</>}
+                  </button>}
                 </div>)}
                 {chatLoading && <div className="fd-chat-message is-assistant" role="status"><Sparkles aria-hidden="true" /><p>Thinking through the claim…</p></div>}
               </div>

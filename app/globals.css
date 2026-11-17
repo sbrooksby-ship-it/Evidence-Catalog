@@ -338,6 +338,12 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-chat-message svg { width: 14px; height: 14px; flex: 0 0 auto; margin-top: 2px; color: #66836d; }
 .fd-chat-message p { margin: 0; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
 .fd-chat-message.is-user p { color: inherit; }
+.fd-chat-message.has-action { flex-direction: column; }
+.fd-chat-message.has-action > svg { margin: 0 0 -3px; }
+.fd-chat-action { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #aebfae; border-radius: 9px; color: #36583f; background: #fffefa; font: 600 10px 'DM Sans', sans-serif; cursor: pointer; }
+.fd-chat-action:hover:not(:disabled) { border-color: #69896f; background: #f5f8f2; }
+.fd-chat-action:disabled { opacity: .58; cursor: not-allowed; }
+.fd-chat-action svg { width: 13px; height: 13px; margin: 0; color: inherit; }
 .fd-chat-compose { position: relative; }
 .fd-chat-compose textarea { width: 100%; min-height: 83px; resize: vertical; padding: 12px 49px 12px 13px; border: 1px solid var(--fd-line); border-radius: 12px; outline: 0; color: #313a34; background: #fffefa; font: 12px/1.5 'DM Sans', sans-serif; }
 .fd-chat-compose textarea:focus { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
