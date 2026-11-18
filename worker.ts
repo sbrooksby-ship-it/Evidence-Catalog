@@ -1992,7 +1992,9 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
   let evidenceId = "";
   let chunksStored = 0;
   let insertedInSupabase = false;
+  let ingestionStage = "Gemini study extraction";
   try {
+    ingestionStage = "Gemini study extraction";
     const parts: Array<Record<string, unknown>> = fileBase64
       ? [
         { inlineData: { mimeType: fileMimeType, data: fileBase64 } },
@@ -2069,6 +2071,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
     chunks = splitRdStudyText(fullStudyText);
     if (!chunks.length) return jsonResponse({ error: "No readable study text could be chunked." }, 422);
 
+    ingestionStage = "Gemini batched embeddings";
     const embeddings = await generateEmbeddingBatch(
       chunks.map((text) => ({ text: `${title}\n${text}`, dimensions: 1536 as const })),
       geminiApiKey,
@@ -2079,7 +2082,9 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
       return jsonResponse({ error: "Gemini could not generate embeddings for every study section. Please try again." }, 502);
     }
 
+    ingestionStage = "Google Sheets authorization";
     const accessToken = await getGoogleSheetsAccessToken(googleEmail, googlePrivateKey);
+    ingestionStage = "Evidence Catalog ID lookup";
     evidenceId = await nextRdEvidenceId(spreadsheetId, accessToken);
     const sourceUrl = `rd-study://${evidenceId}`;
     const rows = chunks.map((chunk, index) => {
@@ -2101,6 +2106,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
         },
       };
     });
+    ingestionStage = "Supabase bulk insert";
     const supabaseResponse = await fetch(`${supabaseUrl}/rest/v1/scraped_content`, {
       method: "POST",
       headers: {
@@ -2123,6 +2129,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
     insertedInSupabase = true;
     chunksStored = rows.length;
 
+    ingestionStage = "Evidence Catalog row append";
     await appendRdEvidenceRow(spreadsheetId, accessToken, [
       evidenceId,
       title,
@@ -2138,13 +2145,18 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
     return jsonResponse({ ok: true, evidenceId, chunksStored, summary: metadata.key_findings });
   } catch (error) {
     console.error("R&D study ingestion failed.", error);
+    const detail = error instanceof Error ? error.message : "Unknown ingestion error";
+    const stageDetail = ingestionStage ? ` at ${ingestionStage}` : "";
     return insertedInSupabase
       ? jsonResponse({
         error: "The study is stored in Supabase, but syncing it to Evidence Catalog failed. Contact an administrator before retrying.",
         evidenceId,
         chunksStored,
+        detail,
       }, 502)
-      : jsonResponse({ error: "The R&D study could not be ingested. Please try again." }, 502);
+      : jsonResponse({
+        error: `The R&D study could not be ingested${stageDetail}. ${detail}`,
+      }, 502);
   }
 }
 
