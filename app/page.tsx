@@ -77,6 +77,7 @@ type RdUploadResult = {
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
 const CLAIM_CATEGORIES = ["Clinical Claims", "Substantiated Claims", "Indicative Claims", "Field Claims"] as const;
 const RD_EVIDENCE_TYPES: RdEvidenceType[] = ["Clinical Study", "Ingredient Research", "Product & Lab Testing"];
+const RD_DEFAULT_AUTHOR_SOURCE = "R&D / Internal Research Team";
 const RECENT_THREAD_STORAGE_KEY = "claims-portal:recent-chats";
 const MAX_RECENT_THREADS = 10;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
@@ -248,7 +249,7 @@ export default function MarketingWorkspace() {
   const [rdStudyTitle, setRdStudyTitle] = useState("");
   const [rdProductIngredient, setRdProductIngredient] = useState("");
   const [rdEvidenceType, setRdEvidenceType] = useState<RdEvidenceType>("Clinical Study");
-  const [rdAuthorSource, setRdAuthorSource] = useState("R&D / Internal Research Team");
+  const [rdAuthorSource, setRdAuthorSource] = useState(RD_DEFAULT_AUTHOR_SOURCE);
   const [rdPublicationDate, setRdPublicationDate] = useState(localDateInputValue);
   const [rdStudyText, setRdStudyText] = useState("");
   const [rdFileName, setRdFileName] = useState("");
@@ -262,6 +263,22 @@ export default function MarketingWorkspace() {
   const activeThreadIdRef = useRef("main");
   const unreadThreadIdsRef = useRef(new Set<string>());
   const rdFileInputRef = useRef<HTMLInputElement>(null);
+
+  function resetRdStudyForm() {
+    setRdStudyTitle("");
+    setRdProductIngredient("");
+    setRdEvidenceType("Clinical Study");
+    setRdAuthorSource(RD_DEFAULT_AUTHOR_SOURCE);
+    setRdPublicationDate(localDateInputValue());
+    setRdStudyText("");
+    setRdFileName("");
+    setRdFileBase64("");
+    setRdFileMimeType("");
+    setRdResult(null);
+    setRdError("");
+    setRdDragOver(false);
+    if (rdFileInputRef.current) rdFileInputRef.current.value = "";
+  }
 
   async function selectRdFile(file: File) {
     try {
@@ -1192,7 +1209,7 @@ export default function MarketingWorkspace() {
               </div>}
               {rdResult && <div className="rd-success-card" role="status">
                 <CheckCircle2 aria-hidden="true" />
-                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Evidence Catalog.</p><small>{rdResult.summary}</small></div>
+                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Evidence Catalog.</p><small>{rdResult.summary}</small><button className="rd-reset-button" type="button" onClick={resetRdStudyForm}>Start another upload</button></div>
               </div>}
               <button className="rd-submit-button" type="submit" disabled={rdUploading || (!rdFileBase64 && !rdStudyText.trim())}>
                 {rdUploading ? "Extracting study metadata & embeddings..." : "Ingest R&D Study"}

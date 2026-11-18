@@ -120,6 +120,7 @@ const RD_EVIDENCE_TYPES: RdEvidenceType[] = [
   "Ingredient Research",
   "Product & Lab Testing",
 ];
+const RD_DEFAULT_AUTHOR_SOURCE = "R&D / Internal Research Team";
 const RD_MAX_BODY_BYTES = 18 * 1024 * 1024;
 const RD_MAX_PDF_BYTES = 12 * 1024 * 1024;
 
@@ -1913,7 +1914,7 @@ function cleanRdMetadata(value: unknown, fallback: RdStudyMetadata): RdStudyMeta
   return {
     evidence_type: evidenceType,
     product_ingredient: field("product_ingredient", 300),
-    author_source: field("author_source", 300),
+    author_source: fallback.author_source,
     publication_date: normalizedDate,
     methodology: field("methodology", 500),
     sample_population: field("sample_population", 500),
@@ -1969,7 +1970,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
   const productIngredient = typeof payload.productIngredient === "string" ? payload.productIngredient.trim() : "";
   const authorSource = typeof payload.authorSource === "string" && payload.authorSource.trim()
     ? payload.authorSource.trim()
-    : "R&D / Internal Research Team";
+    : RD_DEFAULT_AUTHOR_SOURCE;
   const publicationDate = typeof payload.publicationDate === "string" ? payload.publicationDate.trim() : "";
   const evidenceType = RD_EVIDENCE_TYPES.includes(payload.evidenceType as RdEvidenceType)
     ? payload.evidenceType as RdEvidenceType
