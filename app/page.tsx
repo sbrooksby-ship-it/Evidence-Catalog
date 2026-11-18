@@ -700,7 +700,7 @@ export default function MarketingWorkspace() {
     try {
       const thread = claimThreadsRef.current.find((item) => item.id === submissionId);
       const context = thread
-        ? `Audited claim: ${thread.proposed_claim}\nAudit findings: ${(thread.ai_evaluation || "The audit is still processing.").slice(0, 4000)}`
+        ? `Audited claim: ${thread.proposed_claim}\nAudit findings: ${(thread.ai_evaluation || "The audit is still processing.").slice(0, 4000)}\nLinked study details: ${(thread.supporting_study || "No linked study details were provided.").slice(0, 3000)}`
         : "The audit details are not currently available.";
       const previousMessages: ChatMessage[] = threadMessages
         .filter((message) => message.role === "user" || message.role === "assistant")
@@ -710,10 +710,8 @@ export default function MarketingWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [
-            ...previousMessages,
-            { role: "user", content: `${context}\n\nFollow-up: ${content}` },
-          ],
+          messages: [...previousMessages, { role: "user", content }],
+          auditContext: context,
         }),
       });
 
@@ -904,7 +902,7 @@ export default function MarketingWorkspace() {
                 </div>
                 <form className="fd-thread-compose" onSubmit={sendThreadMessage}>
                   <label className="fd-sr-only" htmlFor="claim-thread-input">Message Claims Researcher</label>
-                  <textarea id="claim-thread-input" value={threadInput} onChange={(event) => setThreadInput(event.target.value)} maxLength={3000} placeholder="Ask a question about this audit…" required />
+                  <textarea id="claim-thread-input" value={threadInput} onChange={(event) => setThreadInput(event.target.value)} maxLength={3000} placeholder="Suggest a revision or ask whether the studies support it…" required />
                   <button type="submit" disabled={threadSending || !threadInput.trim() || !supabase} aria-label="Send discussion message"><Send aria-hidden="true" /></button>
                 </form>
               </div>
