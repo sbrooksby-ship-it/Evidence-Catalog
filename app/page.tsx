@@ -286,7 +286,7 @@ export default function MarketingWorkspace() {
         }
       });
 
-    async function loadClaimThreads() {
+    async function loadClaimThreads(initialLoad = false) {
       const { data, error } = await client
         .from("claim_submissions")
         .select(CLAIM_THREAD_COLUMNS)
@@ -294,8 +294,12 @@ export default function MarketingWorkspace() {
         .limit(100);
       if (!active) return;
       if (error) {
-        setThreadsLoading(false);
-        toast.error("Could not load claim audits", { description: error.message });
+        if (initialLoad) {
+          setThreadsLoading(false);
+          toast.error("Could not load claim audits", { description: error.message });
+        } else {
+          console.error("Could not refresh claim audits.", error);
+        }
         return;
       }
 
@@ -307,10 +311,20 @@ export default function MarketingWorkspace() {
       setClaimThreads(nextThreads);
       setThreadsLoading(false);
     }
-    void loadClaimThreads();
+    void loadClaimThreads(true);
+
+    const refreshInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void loadClaimThreads();
+    }, 5_000);
+    const refreshOnVisible = () => {
+      if (document.visibilityState === "visible") void loadClaimThreads();
+    };
+    document.addEventListener("visibilitychange", refreshOnVisible);
 
     return () => {
       active = false;
+      window.clearInterval(refreshInterval);
+      document.removeEventListener("visibilitychange", refreshOnVisible);
       void client.removeChannel(channel);
     };
   }, []);
