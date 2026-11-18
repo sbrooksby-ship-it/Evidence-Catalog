@@ -1999,26 +1999,53 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
         { text: extractionPrompt },
       ]
       : [{ text: extractionPrompt }];
-    const extractionResponse = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": geminiApiKey },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 8192 },
-        }),
-        signal: AbortSignal.timeout(90_000),
-      },
-    );
-    if (!extractionResponse.ok) {
-      console.error("Gemini R&D study extraction failed.", {
-        status: extractionResponse.status,
-        errorBody: (await extractionResponse.text()).slice(0, 1_000),
+    let extractionResponse: Response | null = null;
+    let extractionPayload: unknown = null;
+    let lastExtractionError = "";
+    let lastExtractionStatus = 502;
+    const extractionModels = [
+      "gemini-3.1-flash-lite",
+      "gemini-2.5-flash",
+    ];
+    for (const model of extractionModels) {
+      const candidateResponse = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": geminiApiKey },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 8192 },
+          }),
+          signal: AbortSignal.timeout(90_000),
+        },
+      );
+      if (candidateResponse.ok) {
+        extractionResponse = candidateResponse;
+        extractionPayload = await candidateResponse.json();
+        break;
+      }
+      const errorBody = await candidateResponse.text();
+      lastExtractionStatus = candidateResponse.status;
+      try {
+        lastExtractionError = extractGeminiError(JSON.parse(errorBody) as unknown) || errorBody.slice(0, 500);
+      } catch {
+        lastExtractionError = errorBody.slice(0, 500);
+      }
+      console.error("Gemini R&D study extraction model failed.", {
+        model,
+        status: candidateResponse.status,
+        errorBody: errorBody.slice(0, 1_000),
       });
-      return jsonResponse({ error: geminiChatError(extractionResponse.status) }, 502);
     }
-    const extractionPayload: unknown = await extractionResponse.json();
+    if (!extractionResponse || !extractionPayload) {
+      const detail = lastExtractionError
+        ? ` Gemini returned: ${lastExtractionError.slice(0, 300)}`
+        : "";
+      return jsonResponse({
+        error: `${geminiChatError(lastExtractionStatus)}${detail}`,
+      }, 502);
+    }
     const extractionText = extractReply(extractionPayload);
     if (!extractionText) {
       return jsonResponse({ error: "Gemini did not return extracted study text and metadata." }, 502);
