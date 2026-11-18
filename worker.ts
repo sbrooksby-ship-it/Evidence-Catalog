@@ -7,6 +7,9 @@ interface WorkerEnvironment {
   ASSETS: {
     fetch(request: Request): Promise<Response>;
   };
+  AUDIT_QUEUE?: {
+    send(message: AuditQueueJob, options?: { contentType: "json" }): Promise<void>;
+  };
   GEMINI_API_KEY?: string;
   FIRECRAWL_API_KEY?: string;
   CLAIM_EMBED_WEBHOOK_SECRET?: string;
@@ -18,6 +21,21 @@ interface WorkerEnvironment {
 
 interface WorkerExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
+}
+
+interface AuditQueueJob {
+  submissionId: string;
+}
+
+interface AuditQueueMessage {
+  body: AuditQueueJob;
+  attempts: number;
+  ack(): void;
+  retry(): void;
+}
+
+interface AuditQueueBatch {
+  messages: AuditQueueMessage[];
 }
 
 interface AuditClaim {
@@ -181,10 +199,10 @@ function parseAuditClaim(value: unknown): AuditClaim | null {
   };
 }
 
-function auditRecordUrl(supabaseUrl: string, id: string, status?: string): URL {
+function auditRecordUrl(supabaseUrl: string, id: string, status?: string, includeProcessing = false): URL {
   const url = new URL("/rest/v1/claim_submissions", supabaseUrl);
   url.searchParams.set("id", `eq.${id}`);
-  if (status) url.searchParams.set("status", `eq.${status}`);
+  if (status) url.searchParams.set("status", includeProcessing ? "in.(pending,processing)" : `eq.${status}`);
   return url;
 }
 
@@ -195,9 +213,25 @@ async function generateEmbedding(
   dimensions: 768 | 1536,
   timeoutMs = 15_000,
 ): Promise<number[] | null> {
+  const [embedding] = await generateEmbeddingBatch(
+    [{ text, dimensions }],
+    geminiApiKey,
+    taskType,
+    timeoutMs,
+  );
+  return embedding;
+}
+
+async function generateEmbeddingBatch(
+  inputs: Array<{ text: string; dimensions: 768 | 1536 }>,
+  geminiApiKey: string,
+  taskType: "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT",
+  timeoutMs = 30_000,
+): Promise<Array<number[] | null>> {
+  if (inputs.length === 0) return [];
   try {
     const response = await fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent",
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents",
       {
         method: "POST",
         headers: {
@@ -205,34 +239,45 @@ async function generateEmbedding(
           "x-goog-api-key": geminiApiKey,
         },
         body: JSON.stringify({
-          content: { parts: [{ text: text.slice(0, 6_000) }] },
-          taskType,
-          outputDimensionality: dimensions,
+          requests: inputs.map(({ text, dimensions }) => ({
+            model: "models/gemini-embedding-001",
+            content: { parts: [{ text: text.slice(0, 6_000) }] },
+            taskType,
+            outputDimensionality: dimensions,
+          })),
         }),
         signal: AbortSignal.timeout(timeoutMs),
       },
     );
     if (!response.ok) {
-      console.error("Gemini embedding request failed; status", response.status);
-      return null;
+      const errorBody = (await response.text()).slice(0, 1_000);
+      console.error("Gemini batch embedding request failed.", { status: response.status, errorBody });
+      return inputs.map(() => null);
     }
 
     const payload: unknown = await response.json();
-    if (!isRecord(payload) || !isRecord(payload.embedding) || !Array.isArray(payload.embedding.values)) {
-      console.error("Gemini returned an invalid embedding response.");
-      return null;
+    if (!isRecord(payload) || !Array.isArray(payload.embeddings) || payload.embeddings.length !== inputs.length) {
+      console.error("Gemini returned an invalid batch embedding response.");
+      return inputs.map(() => null);
     }
-    const values: unknown[] = payload.embedding.values;
-    if (values.length !== dimensions || !values.every((value) => typeof value === "number" && Number.isFinite(value))) {
-      console.error("Gemini returned an embedding with an unexpected dimension or value.");
-      return null;
-    }
-    const vector = values as number[];
-    const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
-    return vector.map((value) => value / norm);
+    return payload.embeddings.map((item, index) => {
+      if (!isRecord(item) || !Array.isArray(item.values)) {
+        console.error("Gemini returned a malformed embedding in its batch.", { index });
+        return null;
+      }
+      const values: unknown[] = item.values;
+      if (values.length !== inputs[index].dimensions
+        || !values.every((value) => typeof value === "number" && Number.isFinite(value))) {
+        console.error("Gemini returned an embedding with an unexpected dimension or value.", { index });
+        return null;
+      }
+      const vector = values as number[];
+      const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0)) || 1;
+      return vector.map((value) => value / norm);
+    });
   } catch (error) {
-    console.error("Gemini embedding request failed.", error);
-    return null;
+    console.error("Gemini batch embedding request failed.", error);
+    return inputs.map(() => null);
   }
 }
 
@@ -573,34 +618,29 @@ async function isStudyAlreadyStored(
   }
 }
 
-async function persistScrapedContent(
+async function persistScrapedContentBatch(
   env: WorkerEnvironment,
   headers: Record<string, string>,
-  sourceUrl: string,
-  title: string,
-  content: string,
-  vector: number[],
-  metadata: Record<string, string | number>,
+  rows: Array<Record<string, unknown>>,
 ): Promise<void> {
-  if (!env.SUPABASE_URL && !env.NEXT_PUBLIC_SUPABASE_URL) return;
+  if (rows.length === 0) return;
   const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
   if (!supabaseUrl) return;
   try {
     const response = await fetch(`${supabaseUrl}/rest/v1/scraped_content`, {
       method: "POST",
       headers: { ...headers, Prefer: "return=minimal" },
-      body: JSON.stringify({
-        source_url: sourceUrl,
-        title,
-        chunk_content: content.slice(0, 12_000),
-        entity_type: "clinical_study",
-        authoritative_score: 0.8,
-        embedding: JSON.stringify(vector),
-        metadata,
-      }),
-      signal: AbortSignal.timeout(10_000),
+      body: JSON.stringify(rows),
+      signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) console.error("Supabase could not save scraped content; status", response.status);
+    if (!response.ok) {
+      const errorBody = (await response.text()).slice(0, 1_000);
+      console.error("Supabase could not save scraped content.", {
+        status: response.status,
+        rowCount: rows.length,
+        errorBody,
+      });
+    }
   } catch (error) {
     console.error("Supabase scraped-content insert failed.", error);
   }
@@ -635,7 +675,10 @@ async function persistEvidence(
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) console.error("Supabase could not save discovered evidence; status", response.status);
+    if (!response.ok) {
+      const errorBody = (await response.text()).slice(0, 1_000);
+      console.error("Supabase could not save discovered evidence.", { status: response.status, errorBody });
+    }
   } catch (error) {
     console.error("Supabase evidence insert failed.", error);
   }
@@ -657,37 +700,36 @@ async function embedAndStoreStudy(
     return;
   }
 
-  const evidenceChunk = prioritizeStudyChunks(chunks)[0];
+  const selectedChunks = prioritizeStudyChunks(chunks).slice(0, 8);
+  const evidenceChunk = selectedChunks[0];
   const evidenceText = `Study: ${title} | Source: ${sourceUrl} | Section: ${evidenceChunk.section}\n${evidenceChunk.text}`;
-  const evidenceVectorPromise = generateEmbedding(
-    evidenceText,
-    env.GEMINI_API_KEY || "",
-    "RETRIEVAL_DOCUMENT",
-    768,
-  );
-
-  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
-    const chunk = chunks[chunkIndex];
-    const contextualChunk = `Study: ${title} | Source: ${sourceUrl} | Section: ${chunk.section}\n${chunk.text}`;
-    const vector = await generateEmbedding(
-      contextualChunk,
-      env.GEMINI_API_KEY || "",
-      "RETRIEVAL_DOCUMENT",
-      1536,
-    );
-    if (!vector) continue;
-    await persistScrapedContent(
-      env,
-      headers,
-      sourceUrl,
+  const contextualChunks = selectedChunks.map((chunk) =>
+    `Study: ${title} | Source: ${sourceUrl} | Section: ${chunk.section}\n${chunk.text}`);
+  const vectors = await generateEmbeddingBatch([
+    ...contextualChunks.map((text) => ({ text, dimensions: 1536 as const })),
+    { text: evidenceText, dimensions: 768 },
+  ], env.GEMINI_API_KEY || "", "RETRIEVAL_DOCUMENT");
+  const scrapedRows = selectedChunks.flatMap((chunk, index) => {
+    const vector = vectors[index];
+    if (!vector) return [];
+    return [{
+      source_url: sourceUrl,
       title,
-      contextualChunk,
-      vector,
-      { ...metadata, section: chunk.section, chunk_index: chunkIndex, chunk_count: chunks.length },
-    );
-  }
+      chunk_content: contextualChunks[index].slice(0, 12_000),
+      entity_type: "clinical_study",
+      authoritative_score: 0.8,
+      embedding: JSON.stringify(vector),
+      metadata: {
+        ...metadata,
+        section: chunk.section,
+        chunk_index: chunks.indexOf(chunk),
+        chunk_count: chunks.length,
+      },
+    }];
+  });
+  await persistScrapedContentBatch(env, headers, scrapedRows);
 
-  const evidenceVector = await evidenceVectorPromise;
+  const evidenceVector = vectors[vectors.length - 1];
   if (evidenceVector) {
     await persistEvidence(
       env,
@@ -1142,7 +1184,6 @@ async function handleClaimEmbeddingWebhook(
 async function handleAudit(
   request: Request,
   env: WorkerEnvironment,
-  ctx: WorkerExecutionContext,
 ): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Method not allowed.", {
@@ -1167,11 +1208,12 @@ async function handleAudit(
   const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
   const geminiApiKey = env.GEMINI_API_KEY;
-  if (!supabaseUrl || !supabaseKey || !geminiApiKey) {
+  if (!supabaseUrl || !supabaseKey || !geminiApiKey || !env.AUDIT_QUEUE) {
     const missingConfig = [
       !supabaseUrl ? "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL" : null,
       !supabaseKey ? "SUPABASE_SERVICE_ROLE_KEY" : null,
       !geminiApiKey ? "GEMINI_API_KEY" : null,
+      !env.AUDIT_QUEUE ? "AUDIT_QUEUE binding" : null,
     ].filter((name): name is string => name !== null);
     console.error("Audit Worker is missing configuration:", missingConfig);
     return jsonResponse({
@@ -1181,7 +1223,13 @@ async function handleAudit(
   }
 
   const recordId = payload.record.id;
-  ctx.waitUntil(processAudit(recordId, env, ctx, supabaseUrl, supabaseKey, geminiApiKey));
+  try {
+    await env.AUDIT_QUEUE.send({ submissionId: recordId }, { contentType: "json" });
+  } catch (error) {
+    console.error("Could not enqueue claim audit.", { submissionId: recordId, error });
+    return jsonResponse({ error: "The audit could not be queued. Please try again." }, 503);
+  }
+  console.info("Audit queued.", { submissionId: recordId });
   return jsonResponse({ accepted: true, id: recordId }, 202);
 }
 
@@ -1192,7 +1240,8 @@ async function processAudit(
   supabaseUrl: string,
   supabaseKey: string,
   geminiApiKey: string,
-): Promise<void> {
+  retrying: boolean,
+): Promise<"completed" | "failed" | "ignored" | "retry"> {
   const supabaseHeaders = {
     apikey: supabaseKey,
     Authorization: `Bearer ${supabaseKey}`,
@@ -1200,17 +1249,23 @@ async function processAudit(
     Prefer: "return=representation",
   };
   let claimed = false;
+  console.info("Audit processing started.", { submissionId: recordId });
 
   try {
-    const claimResponse = await fetch(auditRecordUrl(supabaseUrl, recordId, "pending"), {
+    const claimResponse = await fetch(auditRecordUrl(supabaseUrl, recordId, "pending", retrying), {
       method: "PATCH",
       headers: supabaseHeaders,
       body: JSON.stringify({ status: "processing" }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!claimResponse.ok) {
-      console.error("Supabase could not claim audit record; status", claimResponse.status);
-      return;
+      const errorBody = (await claimResponse.text()).slice(0, 1_000);
+      console.error("Supabase could not claim audit record.", {
+        submissionId: recordId,
+        status: claimResponse.status,
+        errorBody,
+      });
+      return "retry";
     }
 
     claimed = true;
@@ -1218,18 +1273,20 @@ async function processAudit(
     if (!Array.isArray(claimRows)) throw new Error("Supabase returned an invalid audit claim response.");
     if (claimRows.length === 0) {
       claimed = false;
-      return;
+      console.info("Audit was not claimed because the submission is no longer pending.", {
+        submissionId: recordId,
+      });
+      return "ignored";
     }
     const claim = parseAuditClaim(claimRows[0]);
     if (!claim) throw new Error("Supabase returned an invalid audit record.");
-    scheduleNullClaimEmbeddingBackfill(env, ctx);
 
     const { context: evidenceContext, source: evidenceSource } = await gatherEvidenceContext({
       proposed_claim: claim.proposed_claim,
       topic_title: claim.topic_title,
       supporting_study: claim.supporting_study,
     }, env, { executionContext: ctx });
-    console.info("Audit evidence context source:", evidenceSource);
+    console.info("Audit evidence context gathered.", { submissionId: recordId, source: evidenceSource });
     const prompt = `You are a senior dietary supplement & CPG regulatory compliance auditor (FDA 21 CFR 101.93 / DSHEA / FTC substantiation standards).
 Evaluate the following marketing claim proposal and return ONLY valid JSON with two keys:
 1. "topic_title": A concise 2-4 word title for the sidebar (e.g. "Tart Cherry Joint Comfort").
@@ -1293,16 +1350,28 @@ Evidence Context:\n${evidenceContext}`;
       }),
       signal: AbortSignal.timeout(15_000),
     });
+    const completedBody = await completeResponse.text();
     if (!completeResponse.ok) {
-      console.error("Supabase could not save audit results; status", completeResponse.status);
+      console.error("Supabase completion update failed.", {
+        submissionId: recordId,
+        status: completeResponse.status,
+        errorBody: completedBody.slice(0, 1_000),
+      });
       throw new Error(`Supabase could not save audit results (HTTP ${completeResponse.status}).`);
     }
-    const completedRows: unknown = await completeResponse.json();
+    let completedRows: unknown;
+    try {
+      completedRows = JSON.parse(completedBody);
+    } catch {
+      throw new Error("Supabase returned an unreadable response while saving audit results.");
+    }
     if (!Array.isArray(completedRows) || completedRows.length === 0) {
       throw new Error("Supabase did not update the claim submission; it may no longer be processing.");
     }
+    console.info("Audit processing completed.", { submissionId: recordId });
+    return "completed";
   } catch (error) {
-    console.error("Audit processing failed.", error);
+    console.error("Audit processing failed.", { submissionId: recordId, error });
     if (claimed) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       try {
@@ -1315,17 +1384,80 @@ Evidence Context:\n${evidenceContext}`;
           }),
           signal: AbortSignal.timeout(15_000),
         });
+        const failedBody = await failedResponse.text();
         if (!failedResponse.ok) {
-          console.error("Supabase could not mark audit as failed; status", failedResponse.status);
+          console.error("Supabase failure-status update failed.", {
+            submissionId: recordId,
+            status: failedResponse.status,
+            errorBody: failedBody.slice(0, 1_000),
+          });
         } else {
-          const failedRows: unknown = await failedResponse.json();
-          if (!Array.isArray(failedRows) || failedRows.length === 0) {
-            console.error("Supabase did not update the claim submission to failed.", recordId);
+          let failedRows: unknown;
+          try {
+            failedRows = JSON.parse(failedBody);
+          } catch {
+            failedRows = null;
           }
+          if (!Array.isArray(failedRows) || failedRows.length === 0) {
+            console.error("Supabase did not update the claim submission to failed.", {
+              submissionId: recordId,
+              responseBody: failedBody.slice(0, 1_000),
+            });
+            return "retry";
+          }
+          return "failed";
         }
       } catch (failureError) {
-        console.error("Could not update failed audit status.", failureError);
+        console.error("Could not update failed audit status.", { submissionId: recordId, error: failureError });
       }
+    }
+    return "retry";
+  }
+}
+
+async function handleAuditQueue(
+  batch: AuditQueueBatch,
+  env: WorkerEnvironment,
+  ctx: WorkerExecutionContext,
+): Promise<void> {
+  const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const geminiApiKey = env.GEMINI_API_KEY;
+  if (!supabaseUrl || !supabaseKey || !geminiApiKey) {
+    console.error("Audit queue consumer is missing required Worker configuration.");
+    for (const message of batch.messages) message.retry();
+    return;
+  }
+
+  for (const message of batch.messages) {
+    if (!isRecord(message.body) || typeof message.body.submissionId !== "string" || !message.body.submissionId) {
+      console.error("Discarding an invalid audit queue message.");
+      message.ack();
+      continue;
+    }
+
+    try {
+      const outcome = await processAudit(
+        message.body.submissionId,
+        env,
+        ctx,
+        supabaseUrl,
+        supabaseKey,
+        geminiApiKey,
+        message.attempts > 1,
+      );
+      if (outcome === "retry") {
+        console.error("Audit queue message will be retried.", {
+          submissionId: message.body.submissionId,
+          attempts: message.attempts,
+        });
+        message.retry();
+      } else {
+        message.ack();
+      }
+    } catch (error) {
+      console.error("Audit queue consumer failed.", { submissionId: message.body.submissionId, error });
+      message.retry();
     }
   }
 }
@@ -1333,7 +1465,6 @@ Evidence Context:\n${evidenceContext}`;
 async function handleChat(
   request: Request,
   env: WorkerEnvironment,
-  ctx: WorkerExecutionContext,
 ): Promise<Response> {
   if (request.method !== "POST") {
     return new Response("Method not allowed.", {
@@ -1369,7 +1500,6 @@ async function handleChat(
 
   const messages = parseMessages(body.messages);
   if (messages instanceof Response) return messages;
-  scheduleNullClaimEmbeddingBackfill(env, ctx);
   const recentMessages = messages.slice(-MAX_CONTEXT_MESSAGES);
   const latestUserMessage = messages[messages.length - 1];
   const {
@@ -1456,11 +1586,14 @@ export default {
       return handleClaimEmbeddingWebhook(request, env, ctx);
     }
     if (url.pathname === "/api/chat") {
-      return handleChat(request, env, ctx);
+      return handleChat(request, env);
     }
     if (url.pathname === "/api/audit") {
-      return handleAudit(request, env, ctx);
+      return handleAudit(request, env);
     }
     return env.ASSETS.fetch(request);
+  },
+  async queue(batch: AuditQueueBatch, env: WorkerEnvironment, ctx: WorkerExecutionContext): Promise<void> {
+    await handleAuditQueue(batch, env, ctx);
   },
 };
