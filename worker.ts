@@ -1747,6 +1747,25 @@ function decodePrivateKey(privateKey: string): ArrayBuffer {
 
 async function getGoogleSheetsAccessToken(email: string, privateKey: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
+  const normalizedPrivateKey = privateKey.replace(/\\n/g, "\n").trim();
+  if (!normalizedPrivateKey.includes("PRIVATE KEY")
+    || !normalizedPrivateKey.includes("BEGIN")
+    || !normalizedPrivateKey.includes("END")) {
+    throw new Error("GOOGLE_PRIVATE_KEY is missing or is not a PEM private key.");
+  }
+  let signingKey: CryptoKey;
+  try {
+    signingKey = await crypto.subtle.importKey(
+      "pkcs8",
+      decodePrivateKey(normalizedPrivateKey),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+  } catch (error) {
+    console.error("Google service account private key import failed.", error);
+    throw new Error("GOOGLE_PRIVATE_KEY could not be imported as a PKCS#8 private key.");
+  }
   const header = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
   const claims = base64UrlEncode(new TextEncoder().encode(JSON.stringify({
     iss: email,
@@ -1756,16 +1775,9 @@ async function getGoogleSheetsAccessToken(email: string, privateKey: string): Pr
     exp: now + 3600,
   })));
   const signingInput = `${header}.${claims}`;
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    decodePrivateKey(privateKey),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
   const signature = new Uint8Array(await crypto.subtle.sign(
     "RSASSA-PKCS1-v1_5",
-    key,
+    signingKey,
     new TextEncoder().encode(signingInput),
   ));
   const assertion = `${signingInput}.${base64UrlEncode(signature)}`;
@@ -1779,11 +1791,28 @@ async function getGoogleSheetsAccessToken(email: string, privateKey: string): Pr
     signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) {
+    const errorBody = (await response.text()).slice(0, 1_000);
+    let oauthDetail = "";
+    try {
+      const oauthPayload: unknown = JSON.parse(errorBody);
+      if (isRecord(oauthPayload)) {
+        oauthDetail = [
+          typeof oauthPayload.error === "string" ? oauthPayload.error : "",
+          typeof oauthPayload.error_description === "string" ? oauthPayload.error_description : "",
+        ].filter(Boolean).join(": ");
+      }
+    } catch {
+      oauthDetail = errorBody.replace(/\s+/g, " ").trim();
+    }
     console.error("Google OAuth token exchange failed.", {
       status: response.status,
-      errorBody: (await response.text()).slice(0, 500),
+      errorBody,
     });
-    throw new Error("Google Sheets authorization failed.");
+    throw new Error(
+      oauthDetail
+        ? `Google Sheets authorization failed: ${oauthDetail}`
+        : `Google Sheets authorization failed with HTTP ${response.status}.`,
+    );
   }
   const payload: unknown = await response.json();
   if (!isRecord(payload) || typeof payload.access_token !== "string") {
