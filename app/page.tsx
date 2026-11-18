@@ -5,17 +5,22 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   Activity,
   AlertCircle,
+  ArrowLeft,
+  Beaker,
   CheckCircle2,
   ChevronDown,
   Clock,
   FileCheck2,
+  FileText,
   Layers3,
+  LoaderCircle,
   Link2,
   MessageSquare,
   Search,
   Send,
   ShieldAlert,
   Sparkles,
+  Upload,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -61,8 +66,17 @@ type ClaimChatMessage = {
   created_at: string;
 };
 
+type RdEvidenceType = "Clinical Study" | "Ingredient Research" | "Product & Lab Testing";
+
+type RdUploadResult = {
+  evidenceId: string;
+  chunksStored: number;
+  summary: string;
+};
+
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
 const CLAIM_CATEGORIES = ["Clinical Claims", "Substantiated Claims", "Indicative Claims", "Field Claims"] as const;
+const RD_EVIDENCE_TYPES: RdEvidenceType[] = ["Clinical Study", "Ingredient Research", "Product & Lab Testing"];
 const RECENT_THREAD_STORAGE_KEY = "claims-portal:recent-chats";
 const MAX_RECENT_THREADS = 10;
 const INITIAL_CHAT_MESSAGE: ChatMessage = {
@@ -183,6 +197,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function localDateInputValue(): string {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 const SAMPLE_STUDIES: Evidence[] = [
   { id: "sample-hydration", title: "12-week hydration efficacy trial", evidence_type: "Clinical Trial", description: "+38% skin moisture · n = 240 · 2025", fit_score: 86 },
   { id: "sample-consumer-texture", title: "Consumer perception panel — texture", evidence_type: "Consumer Research", description: "9 in 10 prefer feel · n = 500 · 2026", fit_score: 42 },
@@ -225,9 +244,109 @@ export default function MarketingWorkspace() {
   const [threadMessages, setThreadMessages] = useState<ClaimChatMessage[]>([]);
   const [threadInput, setThreadInput] = useState("");
   const [threadSending, setThreadSending] = useState(false);
+  const [rdPortalOpen, setRdPortalOpen] = useState(false);
+  const [rdStudyTitle, setRdStudyTitle] = useState("");
+  const [rdProductIngredient, setRdProductIngredient] = useState("");
+  const [rdEvidenceType, setRdEvidenceType] = useState<RdEvidenceType>("Clinical Study");
+  const [rdAuthorSource, setRdAuthorSource] = useState("R&D / Internal Research Team");
+  const [rdPublicationDate, setRdPublicationDate] = useState(localDateInputValue);
+  const [rdStudyText, setRdStudyText] = useState("");
+  const [rdFileName, setRdFileName] = useState("");
+  const [rdFileBase64, setRdFileBase64] = useState("");
+  const [rdFileMimeType, setRdFileMimeType] = useState("");
+  const [rdUploading, setRdUploading] = useState(false);
+  const [rdResult, setRdResult] = useState<RdUploadResult | null>(null);
+  const [rdError, setRdError] = useState("");
+  const [rdDragOver, setRdDragOver] = useState(false);
   const claimThreadsRef = useRef<ClaimThread[]>([]);
   const activeThreadIdRef = useRef("main");
   const unreadThreadIdsRef = useRef(new Set<string>());
+  const rdFileInputRef = useRef<HTMLInputElement>(null);
+
+  async function selectRdFile(file: File) {
+    try {
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      if (!extension || !["pdf", "txt", "md"].includes(extension)) {
+        setRdError("Choose a PDF, TXT, or Markdown study file.");
+        return;
+      }
+      if (file.size > 12 * 1024 * 1024) {
+        setRdError("PDF files must be 12 MB or smaller.");
+        return;
+      }
+      setRdError("");
+      setRdResult(null);
+      setRdFileName(file.name);
+      if (extension !== "pdf") {
+        setRdFileBase64("");
+        setRdFileMimeType("");
+        setRdStudyText(await file.text());
+        return;
+      }
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        const end = Math.min(index + 0x8000, bytes.length);
+        for (let byteIndex = index; byteIndex < end; byteIndex += 1) {
+          binary += String.fromCharCode(bytes[byteIndex]);
+        }
+      }
+      setRdStudyText("");
+      setRdFileBase64(btoa(binary));
+      setRdFileMimeType("application/pdf");
+    } catch (error) {
+      setRdError(error instanceof Error ? `Could not read the selected study file: ${error.message}` : "Could not read the selected study file.");
+      setRdFileName("");
+      setRdFileBase64("");
+      setRdFileMimeType("");
+    }
+  }
+
+  async function submitRdStudy(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRdError("");
+    setRdResult(null);
+    setRdUploading(true);
+    try {
+      const response = await fetch("/api/rd-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studyTitle: rdStudyTitle,
+          productIngredient: rdProductIngredient,
+          evidenceType: rdEvidenceType,
+          authorSource: rdAuthorSource,
+          publicationDate: rdPublicationDate,
+          studyText: rdStudyText,
+          ...(rdFileBase64 ? {
+            fileBase64: rdFileBase64,
+            fileMimeType: rdFileMimeType,
+            fileName: rdFileName,
+          } : {}),
+        }),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok || !isRecord(payload) || payload.ok !== true
+        || typeof payload.evidenceId !== "string"
+        || typeof payload.chunksStored !== "number"
+        || typeof payload.summary !== "string") {
+        const message = isRecord(payload) && typeof payload.error === "string"
+          ? payload.error
+          : "The R&D study could not be uploaded.";
+        throw new Error(message);
+      }
+      setRdResult({
+        evidenceId: payload.evidenceId,
+        chunksStored: payload.chunksStored,
+        summary: payload.summary,
+      });
+    } catch (error) {
+      setRdError(error instanceof Error ? error.message : "The R&D study could not be uploaded.");
+    } finally {
+      setRdUploading(false);
+    }
+  }
 
   useEffect(() => {
     if (threadsLoading || recentThreadsInitialized) return;
@@ -801,7 +920,12 @@ export default function MarketingWorkspace() {
       <main className="fd-main">
         <div className="fd-topline">
           <div className="fd-breadcrumb"><span>Campaign workspace</span><b>/</b><strong>01</strong></div>
-          <div className="fd-user-area"><div className="fd-team"><i />Marketing team <b>·</b> Ivy Evergreen</div><div className="fd-avatar">AR</div></div>
+          <div className="fd-user-area">
+            <button className="rd-portal-trigger" type="button" onClick={() => setRdPortalOpen(true)}>
+              <Beaker aria-hidden="true" /><span>R&amp;D Study Portal</span><i>R&amp;D</i>
+            </button>
+            <div className="fd-team"><i />Marketing team <b>·</b> Ivy Evergreen</div><div className="fd-avatar">AR</div>
+          </div>
         </div>
 
         <header className="fd-hero">
@@ -980,6 +1104,105 @@ export default function MarketingWorkspace() {
         </div>
         <footer className="fd-footer"><span>Claims Portal · Ivy Evergreen</span><span>Research informed · Copy ready</span></footer>
       </main>
+      {rdPortalOpen && <div className="rd-portal-overlay">
+        <section className="rd-portal-view" role="dialog" aria-modal="true" aria-labelledby="rd-portal-heading">
+          <header className="rd-portal-header">
+            <button className="rd-back-button" type="button" onClick={() => setRdPortalOpen(false)}>
+              <ArrowLeft aria-hidden="true" /> Back to compliance workspace
+            </button>
+            <div className="rd-portal-brand"><span><Beaker aria-hidden="true" /></span><div><small>Evidence Catalog · Dedicated intake</small><h1 id="rd-portal-heading">R&amp;D Study Portal</h1></div></div>
+            <button className="rd-close-button" type="button" onClick={() => setRdPortalOpen(false)} aria-label="Close R&D Study Portal"><X aria-hidden="true" /></button>
+          </header>
+          <div className="rd-portal-content">
+            <div className="rd-portal-intro">
+              <span className="rd-portal-kicker">Research ingestion</span>
+              <h2>Bring your study<br /><em>into the evidence library.</em></h2>
+              <p>Upload an internal study or paste its text. We’ll extract the study details, store searchable sections, and add this R&amp;D record to the Evidence Catalog sheet.</p>
+              <div className="rd-ingestion-note"><FileCheck2 aria-hidden="true" /><span>R&amp;D submissions are kept separate from claim audits.</span></div>
+            </div>
+            <form className="rd-study-form" onSubmit={submitRdStudy}>
+              <div className="rd-form-heading"><div><span className="rd-portal-kicker">New submission</span><h3>Study details</h3></div><span className="rd-required-note">* Required</span></div>
+              <label className="rd-field rd-field-wide">
+                <span>Study Title <b>*</b></span>
+                <input value={rdStudyTitle} onChange={(event) => { setRdStudyTitle(event.target.value); setRdResult(null); }} maxLength={300} placeholder="e.g., Effects of daily fiber intake on digestive comfort" required />
+              </label>
+              <div className="rd-field-grid">
+                <label className="rd-field">
+                  <span>Product / Ingredient</span>
+                  <input list="rd-product-options" value={rdProductIngredient} onChange={(event) => setRdProductIngredient(event.target.value)} maxLength={300} placeholder="Select or enter a custom ingredient" />
+                  <datalist id="rd-product-options">
+                    <option value="Fruits & Veggies" />
+                    <option value="Fiber & Spice" />
+                    <option value="Whole Health System" />
+                    <option value="Guiltless Snacks" />
+                  </datalist>
+                </label>
+                <label className="rd-field">
+                  <span>Evidence Type</span>
+                  <select value={rdEvidenceType} onChange={(event) => setRdEvidenceType(event.target.value as RdEvidenceType)}>
+                    {RD_EVIDENCE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </label>
+                <label className="rd-field">
+                  <span>Author / Source</span>
+                  <input value={rdAuthorSource} onChange={(event) => setRdAuthorSource(event.target.value)} maxLength={300} />
+                </label>
+                <label className="rd-field">
+                  <span>Publication / Test Date</span>
+                  <input type="date" value={rdPublicationDate} onChange={(event) => setRdPublicationDate(event.target.value)} required />
+                </label>
+              </div>
+              <div className="rd-study-input-heading"><div><span className="rd-field-label">Study Document Input</span><small>Choose a file or paste the readable study text.</small></div></div>
+              <div
+                className={`rd-dropzone${rdDragOver ? " is-dragging" : ""}`}
+                onDragOver={(event) => { event.preventDefault(); setRdDragOver(true); }}
+                onDragLeave={() => setRdDragOver(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setRdDragOver(false);
+                  const file = event.dataTransfer.files[0];
+                  if (file) void selectRdFile(file);
+                }}
+              >
+                <input
+                  ref={rdFileInputRef}
+                  className="rd-file-input"
+                  type="file"
+                  accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (file) void selectRdFile(file);
+                    event.currentTarget.value = "";
+                  }}
+                  aria-label="Upload a PDF, TXT, or Markdown study file"
+                />
+                <span className="rd-upload-icon"><Upload aria-hidden="true" /></span>
+                <div><strong>{rdFileName || "Drop your study file here"}</strong><span>PDF, TXT, or Markdown · PDF max 12 MB</span></div>
+                <button type="button" onClick={() => rdFileInputRef.current?.click()}>Browse files</button>
+              </div>
+              {rdFileBase64 && <p className="rd-file-hint"><FileText aria-hidden="true" /> PDF will be securely sent to Gemini for native text extraction.</p>}
+              <label className="rd-field rd-paste-field">
+                <span>Paste Study Text <small>Optional when uploading a PDF; required when no file is selected.</small></span>
+                <textarea value={rdStudyText} onChange={(event) => { setRdStudyText(event.target.value); setRdResult(null); }} maxLength={200000} placeholder="Paste the full study text, including methods, population, results, and conclusions…" />
+              </label>
+              {rdError && <p className="rd-form-error" role="alert">{rdError}</p>}
+              {rdUploading && <div className="rd-upload-progress" role="status" aria-live="polite">
+                <div className="rd-progress-current"><span className="rd-progress-number">01</span><span>Extracting study metadata &amp; embeddings...</span></div>
+                <div className="rd-progress-next"><span className="rd-progress-number">02</span><span>Syncing to Evidence Catalog...</span></div>
+              </div>}
+              {rdResult && <div className="rd-success-card" role="status">
+                <CheckCircle2 aria-hidden="true" />
+                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Evidence Catalog.</p><small>{rdResult.summary}</small></div>
+              </div>}
+              <button className="rd-submit-button" type="submit" disabled={rdUploading || (!rdFileBase64 && !rdStudyText.trim())}>
+                {rdUploading ? "Extracting study metadata & embeddings..." : "Ingest R&D Study"}
+                {rdUploading ? <LoaderCircle className="rd-spinner" aria-hidden="true" /> : <Send aria-hidden="true" />}
+              </button>
+              <p className="rd-form-foot">Only submissions from this portal are pushed to the R&amp;D Evidence Catalog sheet.</p>
+            </form>
+          </div>
+        </section>
+      </div>}
     </div>
   );
 }
