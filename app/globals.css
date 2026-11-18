@@ -369,6 +369,9 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-dossier-properties dt { margin-bottom: 5px; color: #85877e; font: 9px 'DM Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
 .fd-dossier-properties dd { margin: 0; color: #424a42; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .fd-dossier-properties dd a { display: block; color: #35664e; text-decoration: underline; text-underline-offset: 2px; }
+.fd-study-source { margin-top: 7px; }
+.fd-study-source:first-of-type { margin-top: 0; }
+.fd-study-source span { display: block; color: #85877e; font: 9px 'DM Mono', monospace; }
 .fd-dossier-properties .fd-dossier-claim { color: #26332d; font: italic 500 16px/1.35 'Newsreader', Georgia, serif; }
 .fd-dossier-report { margin-top: 13px; padding: 13px; border: 1px solid #e7e2d7; border-radius: 11px; background: white; }
 .fd-dossier-report h4, .fd-dossier-chat-heading h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: #345744; font-size: 11px; }

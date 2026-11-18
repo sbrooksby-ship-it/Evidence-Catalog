@@ -55,6 +55,12 @@ interface ScrapedMatch {
   similarity: number;
 }
 
+interface StudySource {
+  url: string;
+  title: string;
+  authoritativeScore: number | null;
+}
+
 interface ApprovedClaimMatch {
   id: string;
   claim_text: string;
@@ -618,6 +624,55 @@ async function isStudyAlreadyStored(
   }
 }
 
+async function loadStudySourceMetadata(
+  supabaseUrl: string,
+  headers: Record<string, string>,
+  sources: StudySource[],
+): Promise<StudySource[]> {
+  if (sources.length === 0) return [];
+  const url = new URL("/rest/v1/scraped_content", supabaseUrl);
+  const escapedUrls = sources.map(({ url: sourceUrl }) =>
+    `"${sourceUrl.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`);
+  url.searchParams.set("select", "source_url,title,authoritative_score");
+  url.searchParams.set("source_url", `in.(${escapedUrls.join(",")})`);
+  url.searchParams.set("limit", "100");
+
+  try {
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) {
+      console.error("Supabase could not load study source scores.", { status: response.status });
+      return sources;
+    }
+    const payload: unknown = await response.json();
+    if (!Array.isArray(payload)) {
+      console.error("Supabase returned invalid study source metadata.");
+      return sources;
+    }
+
+    const metadata = new Map<string, { title?: string; score?: number }>();
+    for (const row of payload) {
+      if (!isRecord(row) || typeof row.source_url !== "string") continue;
+      const current = metadata.get(row.source_url) ?? {};
+      if (typeof row.title === "string" && row.title.trim()) current.title = row.title.trim();
+      if (typeof row.authoritative_score === "number" && Number.isFinite(row.authoritative_score)) {
+        current.score = Math.max(current.score ?? Number.NEGATIVE_INFINITY, row.authoritative_score);
+      }
+      metadata.set(row.source_url, current);
+    }
+    return sources.map((source) => {
+      const match = metadata.get(source.url);
+      return {
+        ...source,
+        title: match?.title || source.title,
+        authoritativeScore: match?.score ?? source.authoritativeScore,
+      };
+    });
+  } catch (error) {
+    console.error("Supabase study source metadata lookup failed.", error);
+    return sources;
+  }
+}
+
 async function persistScrapedContentBatch(
   env: WorkerEnvironment,
   headers: Record<string, string>,
@@ -762,16 +817,21 @@ async function gatherEvidenceContext(
   source: EvidenceSource;
   hasCatalogMatch: boolean;
   catalogSearchComplete: boolean;
-  studyUrls: string[];
+  studySources: StudySource[];
 }> {
   const allowWebResearch = options.allowWebResearch ?? true;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const contextBlocks: string[] = [];
   const studyUrls = new Set<string>();
+  const studyTitles = new Map<string, string>();
+  const studyScores = new Map<string, number>();
   const rawStudy = (submission.supporting_study || "").trim();
   const urlMatch = rawStudy.match(/https?:\/\/[^\s<>"')]+/i);
   const explicitUrl = urlMatch ? safeHttpUrl(urlMatch[0].replace(/[.,;:!?]+$/, "")) : null;
-  if (explicitUrl) studyUrls.add(explicitUrl);
+  if (explicitUrl) {
+    studyUrls.add(explicitUrl);
+    studyTitles.set(explicitUrl, submission.topic_title || explicitUrl);
+  }
   const supabaseUrl = env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = env.SUPABASE_SERVICE_ROLE_KEY;
   const supabaseHeaders = supabaseKey ? {
@@ -965,7 +1025,10 @@ async function gatherEvidenceContext(
       contextBlocks.push(`Cached Scientific Evidence (Supabase Vector Store):\n${ragText}`);
       for (const match of studyResult.matches) {
         const sourceUrl = safeHttpUrl(match.source_url);
-        if (sourceUrl) studyUrls.add(sourceUrl);
+        if (sourceUrl) {
+          studyUrls.add(sourceUrl);
+          studyTitles.set(sourceUrl, match.title);
+        }
       }
     }
   } else {
@@ -973,13 +1036,18 @@ async function gatherEvidenceContext(
   }
 
   if (!allowWebResearch) {
+    const sources = Array.from(studyUrls, (url) => ({
+      url,
+      title: studyTitles.get(url) || url,
+      authoritativeScore: null,
+    }));
     return {
       context: contextBlocks.join("\n\n====================\n\n")
         || "No matching studies were found in the Supabase knowledge base.",
       source,
       hasCatalogMatch,
       catalogSearchComplete: claimsSearchComplete && studySearchComplete,
-      studyUrls: Array.from(studyUrls),
+      studySources: sources,
     };
   }
 
@@ -1002,6 +1070,7 @@ async function gatherEvidenceContext(
           splitStudyIntoChunks(scraped),
           { origin: "user_submitted_url" },
         );
+        studyScores.set(explicitUrl, 0.8);
         if (options.executionContext) {
           options.executionContext.waitUntil(storageTask.catch((error) => {
             console.error("Background study indexing failed.", { sourceUrl: explicitUrl, error });
@@ -1053,6 +1122,7 @@ async function gatherEvidenceContext(
             const title = typeof hit.title === "string" && hit.title.trim() ? hit.title.trim() : "Clinical Study";
             if (alreadyStored === true) {
               studyUrls.add(sourceUrl);
+              studyTitles.set(sourceUrl, title);
               const description = typeof hit.description === "string" ? hit.description.trim() : "";
               newStudies.push(`Title: ${title}\nSource: ${sourceUrl}${description ? `\nSummary: ${description}` : ""}`);
               return;
@@ -1077,6 +1147,8 @@ async function gatherEvidenceContext(
               .map((chunk) => `Section: ${chunk.section}\n${chunk.text}`)
               .join("\n\n");
             studyUrls.add(sourceUrl);
+            studyTitles.set(sourceUrl, title);
+            if (alreadyStored === false) studyScores.set(sourceUrl, 0.8);
             newStudies.push(`Title: ${title}\nSource: ${sourceUrl}\nContent:\n${promptExcerpt}`);
 
             if (alreadyStored === false && supabaseUrl && supabaseHeaders) {
@@ -1111,13 +1183,27 @@ async function gatherEvidenceContext(
     }
   }
 
+  const sources = Array.from(studyUrls, (url) => ({
+    url,
+    title: studyTitles.get(url) || url,
+    authoritativeScore: studyScores.get(url) ?? null,
+  }));
+  const studySources = supabaseUrl && supabaseHeaders
+    ? await loadStudySourceMetadata(supabaseUrl, supabaseHeaders, sources)
+    : sources;
+  if (studySources.some((study) => study.authoritativeScore !== null)) {
+    contextBlocks.push(`Study Source Authoritative Scores:\n${studySources
+      .map((study) => `- ${study.title} (${study.url}): ${study.authoritativeScore ?? "not available"}`)
+      .join("\n")}`);
+  }
+
   return {
     context: contextBlocks.join("\n\n====================\n\n")
       || "No matching studies were found in Supabase or in the web research search.",
     source,
     hasCatalogMatch,
     catalogSearchComplete: claimsSearchComplete && studySearchComplete,
-    studyUrls: Array.from(studyUrls),
+    studySources,
   };
 }
 
@@ -1297,14 +1383,14 @@ async function processAudit(
     const {
       context: evidenceContext,
       source: evidenceSource,
-      studyUrls,
+      studySources,
     } = await gatherEvidenceContext({
       proposed_claim: claim.proposed_claim,
       topic_title: claim.topic_title,
       supporting_study: claim.supporting_study,
     }, env, { executionContext: ctx });
     console.info("Audit evidence context gathered.", { submissionId: recordId, source: evidenceSource });
-    if (studyUrls.length === 0) {
+    if (studySources.length === 0) {
       throw new Error("No study source URL was found; the audit cannot be completed without a traceable source.");
     }
     const prompt = `You are a senior dietary supplement & CPG regulatory compliance auditor (FDA 21 CFR 101.93 / DSHEA / FTC substantiation standards).
@@ -1368,8 +1454,9 @@ Evidence Context:\n${evidenceContext}`;
         topic_title: claim.topic_title || (typeof evaluation.topic_title === "string" ? evaluation.topic_title : "") || "Claim Audit",
         ai_evaluation: evaluation.ai_evaluation,
         supporting_study: [
-          claim.supporting_study?.trim(),
-          ...studyUrls.filter((url) => !claim.supporting_study?.includes(url)),
+          claim.supporting_study?.replace(/https?:\/\/[^\s<>"')]+/g, "").trim(),
+          ...studySources.map((study) =>
+            `Study: ${study.title}\nSource: ${study.url}\nAuthoritative score: ${study.authoritativeScore?.toFixed(2) ?? "not available"}`),
         ].filter((value): value is string => Boolean(value)).join("\n\n") || null,
       }),
       signal: AbortSignal.timeout(15_000),

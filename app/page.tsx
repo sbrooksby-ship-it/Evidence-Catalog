@@ -94,6 +94,47 @@ function reportUrls(report: string): string[] {
   return Array.from(new Set(urls));
 }
 
+function parseStudySources(supportingStudy: string | null, evaluation: string | null): StudySourceDisplay[] {
+  const report = `${supportingStudy ?? ""}\n\n${evaluation ?? ""}`;
+  const sources = new Map<string, StudySourceDisplay>();
+  for (const block of report.split(/\n\s*\n/)) {
+    const url = reportUrls(block)[0];
+    if (!url) continue;
+    const title = block.match(/^\s*(?:Study|Title):\s*(.+)$/im)?.[1]?.trim() || url;
+    const scoreText = block.match(/Authoritative score:\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
+    const score = scoreText === undefined ? null : Number(scoreText);
+    if (!sources.has(url)) {
+      sources.set(url, {
+        url,
+        title,
+        authoritativeScore: score !== null && Number.isFinite(score) ? score : null,
+      });
+    } else if (score !== null && Number.isFinite(score)) {
+      const current = sources.get(url);
+      if (current) current.authoritativeScore = score;
+    }
+  }
+  for (const url of reportUrls(report)) {
+    if (!sources.has(url)) sources.set(url, { url, title: url, authoritativeScore: null });
+  }
+  return Array.from(sources.values());
+}
+
+function supportingStudyNotes(supportingStudy: string | null): string {
+  return (supportingStudy ?? "")
+    .split(/\n\s*\n/)
+    .filter((block) => !/^\s*Study:[\s\S]*\nSource:\s*https?:\/\//i.test(block))
+    .join("\n\n")
+    .replace(/https?:\/\/[^\s<>"')]+/g, "")
+    .trim();
+}
+
+type StudySourceDisplay = {
+  url: string;
+  title: string;
+  authoritativeScore: number | null;
+};
+
 function parseClaimThread(value: unknown): ClaimThread | null {
   if (!isRecord(value)
     || typeof value.id !== "string"
@@ -254,6 +295,17 @@ export default function MarketingWorkspace() {
 
     const client = supabase;
     let active = true;
+    let refreshing = false;
+    function notifyCompletedTransition(thread: ClaimThread, previous?: ClaimThread) {
+      if (thread.status !== "completed" || previous?.status === "completed") return;
+      if (activeThreadIdRef.current !== thread.id && !unreadThreadIdsRef.current.has(thread.id)) {
+        const nextUnread = new Set(unreadThreadIdsRef.current);
+        nextUnread.add(thread.id);
+        unreadThreadIdsRef.current = nextUnread;
+        setUnreadThreadIds(nextUnread);
+      }
+      toast.success(`Analysis complete: ${thread.topic_title || "Claim audit"}`);
+    }
     const channel = client
       .channel("claim-submissions-lifecycle")
       .on("postgres_changes", { event: "*", schema: "public", table: "claim_submissions" }, (payload) => {
@@ -270,15 +322,7 @@ export default function MarketingWorkspace() {
           setRecentThreadIds((current) => [thread.id, ...current.filter((id) => id !== thread.id)].slice(0, MAX_RECENT_THREADS));
         }
 
-        if (payload.eventType === "UPDATE" && thread.status === "completed" && previous?.status !== "completed") {
-          if (activeThreadIdRef.current !== thread.id && !unreadThreadIdsRef.current.has(thread.id)) {
-            const nextUnread = new Set(unreadThreadIdsRef.current);
-            nextUnread.add(thread.id);
-            unreadThreadIdsRef.current = nextUnread;
-            setUnreadThreadIds(nextUnread);
-          }
-          toast.success(`Analysis complete: ${thread.topic_title || "Claim audit"}`);
-        }
+        if (payload.eventType === "UPDATE") notifyCompletedTransition(thread, previous);
       })
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR") {
@@ -287,29 +331,43 @@ export default function MarketingWorkspace() {
       });
 
     async function loadClaimThreads(initialLoad = false) {
-      const { data, error } = await client
-        .from("claim_submissions")
-        .select(CLAIM_THREAD_COLUMNS)
-        .order("created_at", { ascending: false })
-        .limit(100);
-      if (!active) return;
-      if (error) {
-        if (initialLoad) {
-          setThreadsLoading(false);
-          toast.error("Could not load claim audits", { description: error.message });
-        } else {
-          console.error("Could not refresh claim audits.", error);
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const { data, error } = await client
+          .from("claim_submissions")
+          .select(CLAIM_THREAD_COLUMNS)
+          .order("created_at", { ascending: false })
+          .limit(100);
+        if (!active) return;
+        if (error) {
+          if (initialLoad) {
+            setThreadsLoading(false);
+            toast.error("Could not load claim audits", { description: error.message });
+          } else {
+            console.error("Could not refresh claim audits.", error);
+          }
+          return;
         }
-        return;
-      }
 
-      const loaded = (data ?? []).map(parseClaimThread).filter((thread): thread is ClaimThread => thread !== null);
-      const merged = new Map(loaded.map((thread) => [thread.id, thread]));
-      claimThreadsRef.current.forEach((thread) => merged.set(thread.id, thread));
-      const nextThreads = Array.from(merged.values()).sort((left, right) => right.created_at.localeCompare(left.created_at));
-      claimThreadsRef.current = nextThreads;
-      setClaimThreads(nextThreads);
-      setThreadsLoading(false);
+        const loaded = (data ?? []).map(parseClaimThread).filter((thread): thread is ClaimThread => thread !== null);
+        const merged = new Map(loaded.map((thread) => [thread.id, thread]));
+        claimThreadsRef.current.forEach((thread) => {
+          if (!merged.has(thread.id)) merged.set(thread.id, thread);
+        });
+        if (!initialLoad) {
+          for (const thread of loaded) {
+            const previous = claimThreadsRef.current.find((item) => item.id === thread.id);
+            notifyCompletedTransition(thread, previous);
+          }
+        }
+        const nextThreads = Array.from(merged.values()).sort((left, right) => right.created_at.localeCompare(left.created_at));
+        claimThreadsRef.current = nextThreads;
+        setClaimThreads(nextThreads);
+        setThreadsLoading(false);
+      } finally {
+        refreshing = false;
+      }
     }
     void loadClaimThreads(true);
 
@@ -403,6 +461,10 @@ export default function MarketingWorkspace() {
     .filter((thread): thread is ClaimThread => thread !== undefined);
   const selectedClaim = claimThreads.find((thread) => thread.id === selectedClaimId);
   const selectedStudy = studies.find((study) => study.id === evidenceId);
+  const selectedClaimStudySources = selectedClaim
+    ? parseStudySources(selectedClaim.supporting_study, selectedClaim.ai_evaluation)
+    : [];
+  const selectedClaimStudyNotes = selectedClaim ? supportingStudyNotes(selectedClaim.supporting_study) : "";
   const claimCategoryCount = new Set(claimThreads.map((thread) => claimCategory(thread.target_tier))).size;
   const pendingClaimCount = claimThreads.filter((thread) => thread.status === "pending" || thread.status === "processing").length;
   const evidenceFit = selectedStudy?.fit_score ?? 68;
@@ -814,8 +876,12 @@ export default function MarketingWorkspace() {
                 <div><dt>Category</dt><dd>{claimCategory(selectedClaim.target_tier)}{selectedClaim.target_tier ? ` · ${selectedClaim.target_tier}` : ""}</dd></div>
                 <div><dt>Audited claim copy</dt><dd className="fd-dossier-claim">{selectedClaim.proposed_claim}</dd></div>
                 <div><dt>Supporting studies & URLs</dt><dd>
-                  {selectedClaim.supporting_study || "No supporting study was linked directly."}
-                  {reportUrls(`${selectedClaim.supporting_study ?? ""}\n${selectedClaim.ai_evaluation ?? ""}`).map((url) => <a key={url} href={url} target="_blank" rel="noreferrer">{url}</a>)}
+                  {selectedClaimStudyNotes && <p>{selectedClaimStudyNotes}</p>}
+                  {selectedClaimStudySources.length === 0 && <span>No supporting study was linked directly.</span>}
+                  {selectedClaimStudySources.map((study) => <div className="fd-study-source" key={study.url}>
+                    <a href={study.url} target="_blank" rel="noreferrer">{study.title}</a>
+                    <span>Authoritative score: {study.authoritativeScore === null ? "Not available" : study.authoritativeScore.toFixed(2)}</span>
+                  </div>)}
                 </dd></div>
                 <div><dt>Study design</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Study design"])}</dd></div>
                 <div><dt>Sample size (n)</dt><dd>{reportField(selectedClaim.ai_evaluation ?? "", ["Sample size", "Sample size (n)"])}</dd></div>
