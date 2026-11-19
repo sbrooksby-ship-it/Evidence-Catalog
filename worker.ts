@@ -817,15 +817,17 @@ async function persistScrapedContentBatch(
       signal: AbortSignal.timeout(20_000),
     });
     if (!response.ok) {
-      const errorBody = (await response.text()).slice(0, 1_000);
+      const errorBody = await response.text();
       console.error("Supabase could not save scraped content.", {
         status: response.status,
         rowCount: rows.length,
         errorBody,
       });
+      throw new Error(`Supabase scraped_content insert failed with HTTP ${response.status}: ${errorBody}`);
     }
   } catch (error) {
     console.error("Supabase scraped-content insert failed.", error);
+    throw error;
   }
 }
 
@@ -2446,6 +2448,7 @@ function buildRdGraphRows(
     source_type: "rd_study",
     approval_status: approvalStatus,
     drive_url: study.driveUrl || null,
+    updated_at: new Date().toISOString(),
   };
   const edgeBase = {
     evidence_id: study.evidenceId,
@@ -2521,6 +2524,45 @@ async function upsertSupabaseRows(
   conflictColumns: string,
 ): Promise<void> {
   if (rows.length === 0) return;
+  let payloadRows = rows;
+  if (table === "graph_nodes") {
+    const nodesByKey = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      if (typeof row.node_key !== "string" || !row.node_key) {
+        throw new Error("Every graph_nodes row must have a non-empty node_key.");
+      }
+      nodesByKey.set(row.node_key, {
+        node_key: row.node_key,
+        node_type: row.node_type,
+        label: row.label,
+        evidence_id: row.evidence_id,
+        source_type: row.source_type,
+        approval_status: row.approval_status,
+        drive_url: row.drive_url ?? null,
+        properties: row.properties ?? {},
+        updated_at: row.updated_at ?? new Date().toISOString(),
+      });
+    }
+    payloadRows = Array.from(nodesByKey.values());
+  } else if (table === "graph_edges") {
+    const edgesByKey = new Map<string, Record<string, unknown>>();
+    for (const row of rows) {
+      if (typeof row.edge_key !== "string" || !row.edge_key) {
+        throw new Error("Every graph_edges row must have a non-empty edge_key.");
+      }
+      edgesByKey.set(row.edge_key, {
+        edge_key: row.edge_key,
+        source_node_key: row.source_node_key,
+        target_node_key: row.target_node_key,
+        relation_type: row.relation_type,
+        evidence_id: row.evidence_id,
+        approval_status: row.approval_status,
+        weight: row.weight,
+        properties: row.properties ?? {},
+      });
+    }
+    payloadRows = Array.from(edgesByKey.values());
+  }
   const url = new URL(`/rest/v1/${table}`, supabaseUrl);
   url.searchParams.set("on_conflict", conflictColumns);
   const response = await fetch(url, {
@@ -2529,19 +2571,19 @@ async function upsertSupabaseRows(
       apikey: supabaseKey,
       Authorization: `Bearer ${supabaseKey}`,
       "Content-Type": "application/json",
-      Prefer: "resolution=merge-duplicates,return=minimal",
+      Prefer: `resolution=merge-duplicates,return=${table === "graph_nodes" || table === "graph_edges" ? "representation" : "minimal"}`,
     },
-    body: JSON.stringify(rows),
+    body: JSON.stringify(payloadRows),
     signal: AbortSignal.timeout(60_000),
   });
   if (!response.ok) {
-    const errorBody = (await response.text()).slice(0, 1_000);
+    const errorBody = await response.text();
     console.error(`Supabase ${table} upsert failed.`, {
       status: response.status,
-      rowCount: rows.length,
+      rowCount: payloadRows.length,
       errorBody,
     });
-    throw new Error(`Supabase ${table} upsert failed with HTTP ${response.status}.`);
+    throw new Error(`Supabase ${table} upsert failed with HTTP ${response.status}: ${errorBody}`);
   }
 }
 
@@ -2565,13 +2607,13 @@ async function deleteStaleRdChunks(
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
-    const errorBody = (await response.text()).slice(0, 1_000);
+    const errorBody = await response.text();
     console.error("Supabase stale R&D chunk cleanup failed.", {
       status: response.status,
       evidenceCount: evidenceIds.length,
       errorBody,
     });
-    throw new Error(`Supabase stale R&D chunk cleanup failed with HTTP ${response.status}.`);
+    throw new Error(`Supabase scraped_content stale-chunk cleanup failed with HTTP ${response.status}: ${errorBody}`);
   }
 }
 
