@@ -88,6 +88,12 @@ function claimCategory(tier: string | null): typeof CLAIM_CATEGORIES[number] {
   return "Field Claims";
 }
 
+function claimTopicTitle(claim: string): string {
+  const words = claim.trim().split(/\s+/).slice(0, 4);
+  const title = words.join(" ").replace(/[.,;:!?]+$/, "");
+  return title.length > 36 ? `${title.slice(0, 33).trimEnd()}...` : title;
+}
+
 function reportField(report: string, labels: string[]): string {
   const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
   const match = report.match(new RegExp(`^\\s*(?:[-*]\\s*)?(?:#{1,6}\\s*)?(?:\\*\\*)?(?:${escapedLabels})(?:\\*\\*)?\\s*:?\\s*(?:\\*\\*)?\\s*(.+)$`, "im"));
@@ -231,7 +237,7 @@ export default function MarketingWorkspace() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([INITIAL_CHAT_MESSAGE]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatStudySearching, setChatStudySearching] = useState(false);
+  const [claimStudySearching, setClaimStudySearching] = useState(false);
   const [claimThreads, setClaimThreads] = useState<ClaimThread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [recentThreadIds, setRecentThreadIds] = useState<string[]>([]);
@@ -646,10 +652,7 @@ export default function MarketingWorkspace() {
     }
   }
 
-  async function sendChatTurn(
-    messageText: string,
-    requestedSearch?: { claim: string },
-  ) {
+  async function sendChatTurn(messageText: string) {
     const content = messageText.trim();
     if (!content || chatLoading) return;
 
@@ -658,7 +661,6 @@ export default function MarketingWorkspace() {
     setChatMessages(conversation);
     setChatInput("");
     setChatLoading(true);
-    setChatStudySearching(Boolean(requestedSearch));
 
     try {
       const response = await fetch("/api/chat", {
@@ -666,10 +668,6 @@ export default function MarketingWorkspace() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: conversation,
-          ...(requestedSearch ? {
-            workshoppedClaim: requestedSearch.claim,
-            searchExternal: true,
-          } : {}),
         }),
       });
 
@@ -710,13 +708,12 @@ export default function MarketingWorkspace() {
       setChatMessages([...conversation, assistantMessage].slice(-20));
     } catch (error) {
       setChatMessages(chatMessages);
-      if (!requestedSearch) setChatInput(content);
+      setChatInput(content);
       toast.error("Could not get a chat reply", {
         description: error instanceof Error ? error.message : "Please try again.",
       });
     } finally {
       setChatLoading(false);
-      setChatStudySearching(false);
     }
   }
 
@@ -725,11 +722,55 @@ export default function MarketingWorkspace() {
     await sendChatTurn(chatInput);
   }
 
-  function searchWithFirecrawl(claimText: string) {
-    void sendChatTurn(
-      "Search the internal evidence library and external scientific sources via Firecrawl for this claim.",
-      { claim: claimText },
-    );
+  async function findStudiesForClaim() {
+    const proposedClaim = claim.trim().replace(/\s+/g, " ");
+    if (!supabase) {
+      toast.error("Connect Supabase before searching for studies.");
+      return;
+    }
+    if (!proposedClaim || proposedClaim.length > 180) {
+      toast.error("The proposed claim must contain 1-180 characters before searching.");
+      return;
+    }
+    if (claimStudySearching) return;
+
+    setClaimStudySearching(true);
+    try {
+      const { data, error } = await supabase
+        .from("claim_submissions")
+        .insert({
+          proposed_claim: proposedClaim,
+          topic_title: claimTopicTitle(proposedClaim),
+          target_tier: "T2",
+          supporting_study: null,
+          work_email: null,
+          status: "pending",
+        })
+        .select(CLAIM_THREAD_COLUMNS)
+        .single();
+      if (error) {
+        toast.error("The study search could not be started", { description: error.message });
+        return;
+      }
+
+      const newThread = parseClaimThread(data);
+      if (!newThread) {
+        toast.error("The study search was submitted, but its status could not be read. Refresh the workspace.");
+        return;
+      }
+      trackClaimThread(newThread);
+      setOpenFolder(claimCategory(newThread.target_tier));
+      selectThread(newThread.id);
+      toast.success("Study search started", {
+        description: "It is now in Recent Claims as pending and will appear in the Claim Catalog under Substantiated Claims.",
+      });
+    } catch (error) {
+      toast.error("The study search could not be started", {
+        description: error instanceof Error ? error.message : "Check your connection and try again.",
+      });
+    } finally {
+      setClaimStudySearching(false);
+    }
   }
 
   async function sendThreadMessage(event: React.FormEvent<HTMLFormElement>) {
@@ -993,7 +1034,7 @@ export default function MarketingWorkspace() {
                     {source.evidenceId ? `${source.evidenceId} · ` : ""}{source.title}
                   </a>)}
                 </div>)}
-                {chatLoading && <div className="fd-chat-message is-assistant" role="status">{chatStudySearching ? <Search aria-hidden="true" /> : <Sparkles aria-hidden="true" />}<p>{chatStudySearching ? "Searching the evidence library and external studies…" : "Thinking through the claim…"}</p></div>}
+                {chatLoading && <div className="fd-chat-message is-assistant" role="status"><Sparkles aria-hidden="true" /><p>Thinking through the claim…</p></div>}
               </div>
               <form className="fd-chat-compose" onSubmit={sendChatMessage}>
                 <label className="fd-sr-only" htmlFor="claim-chat-input">Message Ivy</label>
@@ -1010,11 +1051,11 @@ export default function MarketingWorkspace() {
               <button
                 className="fd-find-studies"
                 type="button"
-                disabled={chatLoading || !claim.trim()}
-                onClick={() => searchWithFirecrawl(claim.trim())}
+                disabled={claimStudySearching || !claim.trim()}
+                onClick={() => void findStudiesForClaim()}
               >
-                {chatLoading ? "Finding studies..." : "Find Studies"}
-                {chatLoading ? <LoaderCircle aria-hidden="true" /> : <Search aria-hidden="true" />}
+                {claimStudySearching ? "Starting study search..." : "Find Studies"}
+                {claimStudySearching ? <LoaderCircle aria-hidden="true" /> : <Search aria-hidden="true" />}
               </button>
             </div>}
           </section>
