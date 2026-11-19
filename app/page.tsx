@@ -73,6 +73,7 @@ type RdUploadResult = {
   chunksStored: number;
   summary: string;
   webViewLink: string;
+  driveUploadWarning?: string;
 };
 
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
@@ -360,6 +361,9 @@ export default function MarketingWorkspace() {
         chunksStored: payload.chunksStored,
         summary: payload.summary,
         webViewLink: payload.webViewLink,
+        ...(typeof payload.driveUploadWarning === "string"
+          ? { driveUploadWarning: payload.driveUploadWarning }
+          : {}),
       });
     } catch (error) {
       setRdError(error instanceof Error ? error.message : "The R&D study could not be uploaded.");
@@ -1212,7 +1216,7 @@ export default function MarketingWorkspace() {
               </div>}
               {rdResult && <div className="rd-success-card" role="status">
                 <CheckCircle2 aria-hidden="true" />
-                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Priority Pending Studies.</p><small>{rdResult.summary}</small>{rdResult.webViewLink && <a className="rd-drive-link" href={rdResult.webViewLink} target="_blank" rel="noreferrer">View Study in Drive</a>}<button className="rd-reset-button" type="button" onClick={resetRdStudyForm}>Start another upload</button></div>
+                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Priority Pending Studies.</p><small>{rdResult.summary}</small>{rdResult.driveUploadWarning && <p className="rd-drive-warning" role="alert">The study was ingested, but its PDF was not archived in Google Drive: {rdResult.driveUploadWarning}</p>}{rdResult.webViewLink && <a className="rd-drive-link" href={rdResult.webViewLink} target="_blank" rel="noreferrer">View Study in Drive</a>}<button className="rd-reset-button" type="button" onClick={resetRdStudyForm}>Start another upload</button></div>
               </div>}
               <button className="rd-submit-button" type="submit" disabled={rdUploading || (!rdFileBase64 && !rdStudyText.trim())}>
                 {rdUploading ? "Extracting study metadata & embeddings..." : "Ingest R&D Study"}

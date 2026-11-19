@@ -1899,12 +1899,24 @@ async function uploadRdStudyToDrive(
     },
   );
   if (!response.ok) {
-    const errorBody = (await response.text()).slice(0, 1_000);
+    const errorBody = await response.text();
     console.error("Google Drive R&D study upload failed.", {
       status: response.status,
-      errorBody,
+      errorBody: errorBody.slice(0, 1_000),
     });
-    throw new Error(`The study PDF could not be uploaded to Google Drive (HTTP ${response.status}).`);
+    let errorMessage = errorBody;
+    try {
+      const errorPayload: unknown = JSON.parse(errorBody);
+      if (isRecord(errorPayload) && isRecord(errorPayload.error)
+        && typeof errorPayload.error.message === "string") {
+        errorMessage = errorPayload.error.message;
+      }
+    } catch {
+      errorMessage = errorBody;
+    }
+    throw new Error(
+      `The study PDF could not be uploaded to Google Drive (HTTP ${response.status}): ${errorMessage}`,
+    );
   }
   const payload: unknown = await response.json();
   if (!isRecord(payload) || typeof payload.id !== "string" || typeof payload.webViewLink !== "string") {
@@ -2039,7 +2051,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
   const geminiApiKey = env.GEMINI_API_KEY;
   const googleEmail = env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const googlePrivateKey = env.GOOGLE_PRIVATE_KEY;
-  const driveFolderId = env.GOOGLE_DRIVE_FOLDER_ID?.trim();
+  const driveFolderId = env.GOOGLE_DRIVE_FOLDER_ID?.trim().replace(/^["']|["']$/g, "").trim();
   const spreadsheetId = env.RD_SHEET_ID;
   const missing = [
     !supabaseUrl ? "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL" : null,
@@ -2152,6 +2164,7 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
   let metadata = fallbackMetadata;
   let evidenceId = "";
   let webViewLink = "";
+  let driveUploadWarning = "";
   let chunksStored = 0;
   let insertedInSupabase = false;
   let ingestionStage = "Gemini study extraction";
@@ -2278,14 +2291,21 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
     evidenceId = await nextRdEvidenceId(spreadsheetId, accessToken);
     if (fileBase64 && driveFolderId) {
       ingestionStage = "Google Drive study upload";
-      webViewLink = await uploadRdStudyToDrive(
-        driveFolderId,
-        accessToken,
-        evidenceId,
-        fileName,
-        fileMimeType,
-        fileBase64,
-      );
+      try {
+        webViewLink = await uploadRdStudyToDrive(
+          driveFolderId,
+          accessToken,
+          evidenceId,
+          fileName,
+          fileMimeType,
+          fileBase64,
+        );
+      } catch (error) {
+        driveUploadWarning = error instanceof Error
+          ? error.message
+          : "The PDF could not be archived in Google Drive.";
+        console.error("R&D study will continue without its Google Drive PDF archive.", error);
+      }
     }
     const sourceUrl = `rd-study://${evidenceId}`;
     const rows = chunks.map((chunk, index) => {
@@ -2353,7 +2373,14 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
       "",
       webViewLink,
     ]);
-    return jsonResponse({ ok: true, evidenceId, chunksStored, summary: metadata.key_findings, webViewLink });
+    return jsonResponse({
+      ok: true,
+      evidenceId,
+      chunksStored,
+      summary: metadata.key_findings,
+      webViewLink,
+      ...(driveUploadWarning ? { driveUploadWarning } : {}),
+    });
   } catch (error) {
     console.error("R&D study ingestion failed.", error);
     const detail = error instanceof Error ? error.message : "Unknown ingestion error";
