@@ -8,13 +8,11 @@ import {
   ArrowLeft,
   Beaker,
   CheckCircle2,
-  ChevronDown,
   Clock,
   FileCheck2,
   FileText,
   Layers3,
   LoaderCircle,
-  Link2,
   MessageSquare,
   Search,
   Send,
@@ -26,25 +24,10 @@ import {
 import { toast } from "sonner";
 import GlassEvidenceFolder from "./components/glass-evidence-folder";
 
-type Evidence = {
-  id: string;
-  title: string;
-  evidence_type?: string | null;
-  description?: string | null;
-  status?: string | null;
-  fit_score?: number;
-};
-
 type ChatMessage = {
   role: "user" | "assistant" | "system";
   content: string;
-  actionRequired?: "SEARCH_AND_AUDIT";
-  suggestedClaim?: string;
   workshoppedClaim?: string;
-  evidenceSearchAvailable?: boolean;
-  firecrawlSearchAvailable?: boolean;
-  actionId?: string;
-  auditDispatched?: boolean;
   studySources?: StudySourceDisplay[];
 };
 
@@ -103,12 +86,6 @@ function claimCategory(tier: string | null): typeof CLAIM_CATEGORIES[number] {
   if (tier === "T2") return "Substantiated Claims";
   if (tier === "T1") return "Indicative Claims";
   return "Field Claims";
-}
-
-function claimTopicTitle(claim: string): string {
-  const words = claim.trim().split(/\s+/).slice(0, 4);
-  const title = words.join(" ").replace(/[.,;:!?]+$/, "");
-  return title.length > 36 ? `${title.slice(0, 33).trimEnd()}...` : title;
 }
 
 function reportField(report: string, labels: string[]): string {
@@ -240,17 +217,6 @@ function localDateInputValue(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-const SAMPLE_STUDIES: Evidence[] = [
-  { id: "sample-hydration", title: "12-week hydration efficacy trial", evidence_type: "Clinical Trial", description: "+38% skin moisture · n = 240 · 2025", fit_score: 86 },
-  { id: "sample-consumer-texture", title: "Consumer perception panel — texture", evidence_type: "Consumer Research", description: "9 in 10 prefer feel · n = 500 · 2026", fit_score: 42 },
-  { id: "sample-ingredient-stability", title: "Ingredient stability under heat", evidence_type: "Lab Assay", description: "Stable to 45°C · n = 36 · 2024", fit_score: 72 },
-  { id: "sample-wear-test", title: "Real-world wear test, humid climates", evidence_type: "Field Study", description: "16-hour wear · n = 120 · 2025", fit_score: 68 },
-  { id: "sample-irritation", title: "Dermatologist-graded irritation study", evidence_type: "Clinical Trial", description: "0 reactions reported · n = 110 · 2026", fit_score: 92 },
-  { id: "sample-scent-recall", title: "Scent recall & preference survey", evidence_type: "Consumer Research", description: "74% recall at 7 days · n = 820 · 2025", fit_score: 54 },
-  { id: "sample-barrier-repair", title: "Barrier repair in dry climates", evidence_type: "Clinical Trial", description: "Improved barrier scores · n = 180 · 2025", fit_score: 81 },
-  { id: "sample-botanical-screen", title: "Botanical extract screening", evidence_type: "Lab Assay", description: "Antioxidant activity confirmed · n = 48 · 2024", fit_score: 63 },
-];
-
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const supabase: SupabaseClient | null = supabaseUrl && supabaseAnonKey
@@ -258,20 +224,14 @@ const supabase: SupabaseClient | null = supabaseUrl && supabaseAnonKey
   : null;
 
 export default function MarketingWorkspace() {
-  const [studies, setStudies] = useState<Evidence[]>([]);
   const [search, setSearch] = useState("");
   const [claimFilter, setClaimFilter] = useState("All claims");
   const [openFolder, setOpenFolder] = useState("");
   const [claim, setClaim] = useState("");
-  const [email, setEmail] = useState("");
-  const [supportingStudy, setSupportingStudy] = useState("");
-  const [tier, setTier] = useState("T2");
-  const [evidenceId, setEvidenceId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([INITIAL_CHAT_MESSAGE]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatAuditSubmittingId, setChatAuditSubmittingId] = useState<string | null>(null);
+  const [chatStudySearching, setChatStudySearching] = useState(false);
   const [claimThreads, setClaimThreads] = useState<ClaimThread[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [recentThreadIds, setRecentThreadIds] = useState<string[]>([]);
@@ -480,29 +440,6 @@ export default function MarketingWorkspace() {
   }, [recentThreadIds, recentThreadsInitialized]);
 
   useEffect(() => {
-    let active = true;
-    async function loadStudies() {
-      if (!supabase) {
-        setStudies(SAMPLE_STUDIES);
-        return;
-      }
-      const { data, error } = await supabase
-        .from("evidence")
-        .select("id, title, evidence_type, description, status")
-        .eq("status", "Active")
-        .order("created_at", { ascending: false });
-      if (!active) return;
-      if (error || !data?.length) {
-        setStudies(SAMPLE_STUDIES);
-      } else {
-        setStudies(data as Evidence[]);
-      }
-    }
-    void loadStudies();
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
     if (!supabase) {
       setThreadsLoading(false);
       return;
@@ -675,14 +612,12 @@ export default function MarketingWorkspace() {
     .map((id) => claimThreads.find((thread) => thread.id === id))
     .filter((thread): thread is ClaimThread => thread !== undefined);
   const selectedClaim = claimThreads.find((thread) => thread.id === selectedClaimId);
-  const selectedStudy = studies.find((study) => study.id === evidenceId);
   const selectedClaimStudySources = selectedClaim
     ? parseStudySources(selectedClaim.supporting_study, selectedClaim.ai_evaluation)
     : [];
   const selectedClaimStudyNotes = selectedClaim ? supportingStudyNotes(selectedClaim.supporting_study) : "";
   const claimCategoryCount = new Set(claimThreads.map((thread) => claimCategory(thread.target_tier))).size;
   const pendingClaimCount = claimThreads.filter((thread) => thread.status === "pending" || thread.status === "processing").length;
-  const evidenceFit = selectedStudy?.fit_score ?? 68;
 
   function trackClaimThread(thread: ClaimThread) {
     const nextThreads = upsertClaimThread(claimThreadsRef.current, thread);
@@ -713,25 +648,17 @@ export default function MarketingWorkspace() {
 
   async function sendChatTurn(
     messageText: string,
-    requestedSearch?: { type: "evidence" | "firecrawl"; claim: string },
+    requestedSearch?: { claim: string },
   ) {
     const content = messageText.trim();
     if (!content || chatLoading) return;
 
     const userMessage: ChatMessage = { role: "user", content };
     const conversation = [...chatMessages.slice(-19), userMessage];
-    const priorAssistant = [...chatMessages].reverse().find((message) => message.role === "assistant");
-    const affirmative = /^(?:yes|yeah|yep|sure|okay|ok|please do|go ahead|do it|let'?s do it)\b[\s.!?,;:-]*.*$/i.test(content);
-    const searchType = requestedSearch?.type
-      || (affirmative && priorAssistant?.firecrawlSearchAvailable
-        ? "firecrawl"
-        : affirmative && priorAssistant?.evidenceSearchAvailable
-          ? "evidence"
-          : undefined);
-    const workshoppedClaim = requestedSearch?.claim || priorAssistant?.workshoppedClaim;
     setChatMessages(conversation);
     setChatInput("");
     setChatLoading(true);
+    setChatStudySearching(Boolean(requestedSearch));
 
     try {
       const response = await fetch("/api/chat", {
@@ -739,9 +666,10 @@ export default function MarketingWorkspace() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: conversation,
-          ...(workshoppedClaim ? { workshoppedClaim } : {}),
-          ...(searchType === "evidence" ? { searchEvidence: true } : {}),
-          ...(searchType === "firecrawl" ? { searchExternal: true } : {}),
+          ...(requestedSearch ? {
+            workshoppedClaim: requestedSearch.claim,
+            searchExternal: true,
+          } : {}),
         }),
       });
 
@@ -777,20 +705,7 @@ export default function MarketingWorkspace() {
         role: "assistant",
         content: assistantContent || "This claim is ready to prepare for review.",
         ...(replyWorkshoppedClaim ? { workshoppedClaim: replyWorkshoppedClaim } : {}),
-        ...(payload.evidenceSearchAvailable === true && replyWorkshoppedClaim
-          ? { evidenceSearchAvailable: true }
-          : {}),
-        ...(payload.firecrawlSearchAvailable === true && replyWorkshoppedClaim
-          ? { firecrawlSearchAvailable: true }
-          : {}),
         ...(studySources.length > 0 ? { studySources } : {}),
-        ...(payload.actionRequired === "SEARCH_AND_AUDIT" && typeof payload.suggestedClaim === "string"
-          ? {
-            actionRequired: "SEARCH_AND_AUDIT" as const,
-            suggestedClaim: payload.suggestedClaim,
-            actionId: crypto.randomUUID(),
-          }
-          : {}),
       };
       setChatMessages([...conversation, assistantMessage].slice(-20));
     } catch (error) {
@@ -801,6 +716,7 @@ export default function MarketingWorkspace() {
       });
     } finally {
       setChatLoading(false);
+      setChatStudySearching(false);
     }
   }
 
@@ -811,119 +727,9 @@ export default function MarketingWorkspace() {
 
   function searchWithFirecrawl(claimText: string) {
     void sendChatTurn(
-      "Search external scientific sources online via Firecrawl for this claim.",
-      { type: "firecrawl", claim: claimText },
+      "Search the internal evidence library and external scientific sources via Firecrawl for this claim.",
+      { claim: claimText },
     );
-  }
-
-  async function searchAndRunAudit(actionId: string, suggestedClaim: string) {
-    const proposedClaim = suggestedClaim.trim().replace(/\s+/g, " ");
-    if (!supabase) {
-      toast.error("Connect Supabase before dispatching an audit.");
-      return;
-    }
-    if (!proposedClaim || proposedClaim.length > 180) {
-      toast.error("The suggested claim must contain 1-180 characters before it can be audited.");
-      return;
-    }
-    if (chatAuditSubmittingId) return;
-
-    setChatAuditSubmittingId(actionId);
-    try {
-      const { data, error } = await supabase
-        .from("claim_submissions")
-        .insert({
-          proposed_claim: proposedClaim,
-          topic_title: claimTopicTitle(proposedClaim),
-          target_tier: "T2",
-          supporting_study: null,
-          work_email: null,
-          status: "pending",
-        })
-        .select(CLAIM_THREAD_COLUMNS)
-        .single();
-      if (error) {
-        toast.error("The online search and audit could not be dispatched", { description: error.message });
-        return;
-      }
-
-      setChatMessages((current) => current.map((message) => message.actionId === actionId
-        ? { ...message, auditDispatched: true }
-        : message));
-      const newThread = parseClaimThread(data);
-      if (!newThread) {
-        toast.error("The audit was created, but its details could not be read. Refresh the workspace.");
-        return;
-      }
-      trackClaimThread(newThread);
-      toast.success("Online search and audit dispatched", {
-        description: `${newThread.topic_title} is researching in the background.`,
-      });
-    } catch (error) {
-      toast.error("The online search and audit could not be dispatched", {
-        description: error instanceof Error ? error.message : "Check your connection and try again.",
-      });
-    } finally {
-      setChatAuditSubmittingId(null);
-    }
-  }
-
-  async function dispatchAudit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!claim.trim()) {
-      toast.error("Add the campaign copy you want to submit.");
-      return;
-    }
-    if (claim.trim().length > 180) {
-      toast.error("Shorten the proposed claim to 180 characters or fewer.");
-      return;
-    }
-    if (!supabase) {
-      toast.error("Connect Supabase before dispatching an audit.");
-      return;
-    }
-    setSubmitting(true);
-    const supportingStudyDetails = supportingStudy.trim() || (selectedStudy
-      ? [selectedStudy.title, selectedStudy.description].filter(Boolean).join(" — ")
-      : "");
-    try {
-      const { data, error } = await supabase
-        .from("claim_submissions")
-        .insert({
-          proposed_claim: claim.trim(),
-          topic_title: claimTopicTitle(claim),
-          target_tier: tier,
-          supporting_study: supportingStudyDetails || null,
-          work_email: email.trim() || null,
-          status: "pending",
-        })
-        .select(CLAIM_THREAD_COLUMNS)
-        .single();
-      if (error) {
-        toast.error("The audit could not be dispatched", { description: error.message });
-        return;
-      }
-      const newThread = parseClaimThread(data);
-      if (!newThread) {
-        toast.error("The audit was created, but its details could not be read. Refresh the workspace.");
-        return;
-      }
-      trackClaimThread(newThread);
-      toast.success("Deep audit dispatched", {
-        description: `${newThread.topic_title} is running in the background. You can keep brainstorming.`,
-      });
-      setClaim("");
-      setEmail("");
-      setSupportingStudy("");
-      setTier("T2");
-      setEvidenceId("");
-    } catch (error) {
-      toast.error("The audit could not be dispatched", {
-        description: error instanceof Error ? error.message : "Check your connection and try again.",
-      });
-    } finally {
-      setSubmitting(false);
-    }
   }
 
   async function sendThreadMessage(event: React.FormEvent<HTMLFormElement>) {
@@ -1068,8 +874,8 @@ export default function MarketingWorkspace() {
         <header className="fd-hero">
           <h1 className="fd-hero-title">Good claims start<br />with <em>good evidence.</em></h1>
           <div className="fd-hero-aside">
-            <p>Shape the claim. Find the research. Send your draft forward, with the proof already attached.</p>
-            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>1</b>Write the claim</span><span><b>2</b>Find a study</span><span><b>3</b>Send for review</span></div>
+            <p>Shape the claim, then find research that can help ground the wording in evidence.</p>
+            <div className="fd-steps" aria-label="Claim drafting steps"><span><b>1</b>Write the claim</span><span><b>2</b>Find a study</span><span><b>3</b>Review evidence</span></div>
           </div>
         </header>
 
@@ -1174,7 +980,7 @@ export default function MarketingWorkspace() {
             <div className="fd-section-head"><div><h2 id="draft-heading">Workshop a claim</h2><p>Talk through your idea, then prepare a claim for review.</p></div></div>
             <div className="fd-chat">
               <div className="fd-chat-log" role="log" aria-live="polite" aria-label="Claim workshop conversation">
-                {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}${message.actionRequired ? " has-action" : ""}`} key={message.actionId ?? `${index}-${message.role}`}>
+                {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}`} key={`${index}-${message.role}`}>
                   {message.role === "assistant" && <Sparkles aria-hidden="true" />}
                   <p>{message.content}</p>
                   {message.studySources?.map((source) => <a
@@ -1186,34 +992,8 @@ export default function MarketingWorkspace() {
                   >
                     {source.evidenceId ? `${source.evidenceId} · ` : ""}{source.title}
                   </a>)}
-                  {message.firecrawlSearchAvailable && message.workshoppedClaim && <button
-                    className="fd-chat-action"
-                    type="button"
-                    disabled={chatLoading}
-                    onClick={() => {
-                      if (message.workshoppedClaim) searchWithFirecrawl(message.workshoppedClaim);
-                    }}
-                  >
-                    <Search aria-hidden="true" />Search External Studies via Firecrawl
-                  </button>}
-                  {message.actionRequired === "SEARCH_AND_AUDIT" && message.suggestedClaim && message.actionId && <button
-                    className="fd-chat-action"
-                    type="button"
-                    disabled={!supabase || chatAuditSubmittingId !== null || message.auditDispatched}
-                    onClick={() => {
-                      if (message.actionId && message.suggestedClaim) {
-                        void searchAndRunAudit(message.actionId, message.suggestedClaim);
-                      }
-                    }}
-                  >
-                    {message.auditDispatched
-                      ? "Audit submitted"
-                      : chatAuditSubmittingId === message.actionId
-                        ? "Submitting..."
-                        : <><Search aria-hidden="true" />Search Online &amp; Run Audit</>}
-                  </button>}
                 </div>)}
-                {chatLoading && <div className="fd-chat-message is-assistant" role="status"><Sparkles aria-hidden="true" /><p>Thinking through the claim…</p></div>}
+                {chatLoading && <div className="fd-chat-message is-assistant" role="status">{chatStudySearching ? <Search aria-hidden="true" /> : <Sparkles aria-hidden="true" />}<p>{chatStudySearching ? "Searching the evidence library and external studies…" : "Thinking through the claim…"}</p></div>}
               </div>
               <form className="fd-chat-compose" onSubmit={sendChatMessage}>
                 <label className="fd-sr-only" htmlFor="claim-chat-input">Message Ivy</label>
@@ -1222,40 +1002,21 @@ export default function MarketingWorkspace() {
               </form>
               <p className="fd-chat-foot">AI brainstorming is not legal advice. Claims need human review.</p>
             </div>
-            {claim && <form className="fd-form fd-claim-review" onSubmit={dispatchAudit}>
+            {claim && <div className="fd-form fd-claim-review">
               <label className="fd-field fd-claim-field">
                 <span className="fd-field-head"><span className="fd-field-label">Proposed claim</span><span className="fd-field-meta">{claim.length} / 180</span></span>
                 <textarea value={claim} onChange={(event) => setClaim(event.target.value)} maxLength={180} required />
               </label>
-              <fieldset className="fd-field fd-tier-field">
-                <legend className="fd-field-label">Target tier</legend>
-                <div className="fd-tier-options" role="radiogroup" aria-label="Target claim tier">
-                  {[['T1', 'Indicative'], ['T2', 'Substantiated'], ['T3', 'Clinical']].map(([value, label]) => <label className={tier === value ? "is-selected" : ""} key={value}>
-                    <input type="radio" name="tier" value={value} checked={tier === value} onChange={() => setTier(value)} />
-                    <span className="fd-tier-code">{value}</span><span>{label}</span>
-                  </label>)}
-                </div>
-              </fieldset>
-              <label className="fd-field">
-                <span className="fd-field-label">Choose a study from your library</span>
-                <span className="fd-select-wrap"><Link2 aria-hidden="true" /><select value={evidenceId} onChange={(event) => setEvidenceId(event.target.value)}><option value="">Pick a study from the library to link it.</option>{studies.map((study) => <option key={study.id} value={study.id}>{study.title}</option>)}</select><ChevronDown aria-hidden="true" /></span>
-              </label>
-              <div className="fd-evidence-fit" aria-live="polite">
-                <div><span>Evidence fit</span><span className="fd-fit-track"><i className={selectedStudy ? "has-study" : ""} /></span><strong>{selectedStudy ? "Linked" : "—"}</strong></div>
-                {selectedStudy && <p>{selectedStudy.title}</p>}
-                <span className="fd-fit-score">{selectedStudy ? evidenceFit : "—"}</span>
-              </div>
-              <label className="fd-field fd-supporting-field">
-                <span className="fd-field-head"><span className="fd-field-label">Study details or URL</span><span className="fd-field-meta">Optional</span></span>
-                <input type="text" value={supportingStudy} onChange={(event) => setSupportingStudy(event.target.value)} placeholder="Add a paper link or specific study details" />
-              </label>
-              <label className="fd-field fd-email-field">
-                <span className="fd-field-head"><span className="fd-field-label">Work email</span><span className="fd-field-meta">Optional</span></span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" />
-              </label>
-              <button className="fd-submit" type="submit" disabled={submitting || !supabase}><span>{submitting ? "Dispatching audit..." : "Dispatch deep audit"}</span><Send aria-hidden="true" /></button>
-              <p className="fd-form-foot">{supabase ? "Your audit runs in the background while you keep brainstorming." : "Connect Supabase to dispatch and track claim audits."}</p>
-            </form>}
+              <button
+                className="fd-find-studies"
+                type="button"
+                disabled={chatLoading || !claim.trim()}
+                onClick={() => searchWithFirecrawl(claim.trim())}
+              >
+                {chatLoading ? "Finding studies..." : "Find Studies"}
+                {chatLoading ? <LoaderCircle aria-hidden="true" /> : <Search aria-hidden="true" />}
+              </button>
+            </div>}
           </section>
         </div>
         <footer className="fd-footer"><span>Claims Portal · Ivy Evergreen</span><span>Research informed · Copy ready</span></footer>

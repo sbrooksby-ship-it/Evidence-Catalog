@@ -325,11 +325,10 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-field-label, .fd-field legend { display: block; margin: 0 0 7px; padding: 0; color: #85877e; font: 9px 'DM Mono', monospace; letter-spacing: .16em; text-transform: uppercase; }
 .fd-field-head .fd-field-label { margin: 0; }
 .fd-field-meta { color: #8d8e85; font: 9px 'DM Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
-.fd-claim-field textarea, .fd-email-field input, .fd-supporting-field input { width: 100%; border: 1px solid var(--fd-line); border-radius: 12px; outline: 0; color: #313a34; background: #f6f2e9; font: 12px 'DM Sans', sans-serif; transition: border-color .15s, box-shadow .15s; }
+.fd-claim-field textarea { width: 100%; border: 1px solid var(--fd-line); border-radius: 12px; outline: 0; color: #313a34; background: #f6f2e9; font: 12px 'DM Sans', sans-serif; transition: border-color .15s, box-shadow .15s; }
 .fd-claim-field textarea { min-height: 119px; resize: vertical; padding: 15px; line-height: 1.5; }
 .fd-claim-field textarea::placeholder { color: #aaa99d; font: italic 17px 'Newsreader', Georgia, serif; }
-.fd-email-field input, .fd-supporting-field input { height: 40px; padding: 0 12px; }
-.fd-claim-field textarea:focus, .fd-email-field input:focus, .fd-supporting-field input:focus, .fd-select-wrap:focus-within { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
+.fd-claim-field textarea:focus { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
 .fd-chat { display: flex; flex-direction: column; gap: 10px; }
 .fd-chat-log { min-height: 245px; max-height: 390px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; padding: 12px; border: 1px solid var(--fd-line); border-radius: 13px; background: #f8f6f0; }
 .fd-chat-message { max-width: 92%; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 12px; }
@@ -339,12 +338,6 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-chat-message p { flex: 1; margin: 0; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
 .fd-chat-message.is-user p { color: inherit; }
 .fd-chat-source { flex-basis: 100%; margin-left: 22px; color: #315c41; font-size: 10px; font-weight: 600; text-decoration: underline; overflow-wrap: anywhere; }
-.fd-chat-message.has-action { flex-direction: column; }
-.fd-chat-message.has-action > svg { margin: 0 0 -3px; }
-.fd-chat-action { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #aebfae; border-radius: 9px; color: #36583f; background: #fffefa; font: 600 10px 'DM Sans', sans-serif; cursor: pointer; }
-.fd-chat-action:hover:not(:disabled) { border-color: #69896f; background: #f5f8f2; }
-.fd-chat-action:disabled { opacity: .58; cursor: not-allowed; }
-.fd-chat-action svg { width: 13px; height: 13px; margin: 0; color: inherit; }
 .fd-chat-compose { position: relative; }
 .fd-chat-compose textarea { width: 100%; min-height: 83px; resize: vertical; padding: 12px 49px 12px 13px; border: 1px solid var(--fd-line); border-radius: 12px; outline: 0; color: #313a34; background: #fffefa; font: 12px/1.5 'DM Sans', sans-serif; }
 .fd-chat-compose textarea:focus { border-color: #829e88; box-shadow: 0 0 0 3px rgba(55, 96, 70, .09); }
@@ -355,6 +348,11 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-chat-foot { margin: 0; color: #85877e; font-size: 9px; line-height: 1.45; }
 .fd-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .fd-claim-review { padding-top: 15px; border-top: 1px solid var(--fd-line); }
+.fd-find-studies { width: 100%; min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 9px; border: 0; border-radius: 11px; color: white; background: var(--fd-orange); font-size: 12px; font-weight: 700; transition: background .15s, transform .15s; }
+.fd-find-studies:hover:not(:disabled) { transform: translateY(-1px); background: #b84d2b; }
+.fd-find-studies:disabled { opacity: .62; cursor: wait; transform: none; }
+.fd-find-studies svg { width: 15px; height: 15px; }
+.fd-find-studies svg.lucide-loader-circle { animation: fd-spin 1.2s linear infinite; }
 .fd-dossier { margin-top: 27px; padding: 17px; border: 1px solid var(--fd-line); border-radius: 15px; background: #fbfaf6; }
 .fd-dossier-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid #e8e3d8; }
 .fd-dossier-header .fd-field-label { margin-bottom: 5px; }
@@ -395,31 +393,6 @@ h1 { font-family: 'Newsreader', Georgia, serif; font-size: clamp(36px, 4vw, 51px
 .fd-thread-compose button { width: 32px; height: 32px; position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; border: 0; border-radius: 8px; color: white; background: var(--fd-green); }
 .fd-thread-compose button:disabled { opacity: .48; cursor: not-allowed; }
 .fd-thread-compose button svg { width: 14px; height: 14px; }
-.fd-tier-field legend { margin-bottom: 8px; }
-.fd-tier-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 4px; border-radius: 12px; background: #efe9da; }
-.fd-tier-options label { min-width: 0; min-height: 48px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; border-radius: 9px; color: #666b61; font-size: 10px; text-align: center; cursor: pointer; }
-.fd-tier-options label.is-selected { color: #29352e; background: white; box-shadow: 0 2px 8px rgba(53, 48, 34, .09); }
-.fd-tier-options input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
-.fd-tier-options label:has(input:focus-visible) { outline: 2px solid #718c77; outline-offset: 2px; }
-.fd-tier-code { color: #929084; font: 9px 'DM Mono', monospace; }
-.fd-tier-options .is-selected .fd-tier-code { color: var(--fd-orange); }
-.fd-select-wrap { height: 43px; display: grid; grid-template-columns: 18px minmax(0, 1fr) 16px; align-items: center; gap: 8px; padding: 0 12px; border: 1px dashed #ded4c0; border-radius: 12px; background: #fffefa; }
-.fd-select-wrap svg { width: 15px; height: 15px; color: #898b82; }
-.fd-select-wrap select { width: 100%; min-width: 0; appearance: none; border: 0; outline: 0; color: #777b72; background: transparent; font-size: 11px; }
-.fd-select-wrap select:has(option:checked[value=""]) { color: #888a80; }
-.fd-evidence-fit { min-height: 55px; padding: 11px 14px; border-radius: 12px; color: #d3ded5; background: #1d4034; }
-.fd-evidence-fit > div { display: flex; align-items: center; gap: 11px; font: 9px 'DM Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
-.fd-fit-track { height: 5px; flex: 1; overflow: hidden; border-radius: 5px; background: rgba(199, 218, 202, .18); }
-.fd-fit-track i { width: 0; height: 100%; display: block; background: #99b39b; transition: width .2s ease; }
-.fd-fit-track i.has-study { width: 100%; }
-.fd-evidence-fit strong { color: #dbe5dc; font-weight: 400; }
-.fd-evidence-fit p { overflow: hidden; margin: 6px 0 0; color: #afc2b3; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.fd-email-field { margin-top: 1px; }
-.fd-submit { width: 100%; min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 10px; border: 0; border-radius: 11px; color: white; background: var(--fd-orange); font-size: 12px; font-weight: 700; transition: background .15s, transform .15s; }
-.fd-submit:hover { transform: translateY(-1px); background: #b84d2b; }
-.fd-submit:disabled { opacity: .62; cursor: wait; transform: none; }
-.fd-submit svg { width: 15px; height: 15px; }
-.fd-form-foot { margin: -5px 0 0; color: #85877e; font-size: 10px; text-align: center; }
 .fd-footer { display: flex; justify-content: space-between; gap: 12px; padding: 14px 2px 0; color: #99998f; font: 8px 'DM Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
 
 @media (max-width: 1120px) {
