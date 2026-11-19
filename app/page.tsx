@@ -40,8 +40,12 @@ type ChatMessage = {
   content: string;
   actionRequired?: "SEARCH_AND_AUDIT";
   suggestedClaim?: string;
+  workshoppedClaim?: string;
+  evidenceSearchAvailable?: boolean;
+  firecrawlSearchAvailable?: boolean;
   actionId?: string;
   auditDispatched?: boolean;
+  studySources?: StudySourceDisplay[];
 };
 
 type ClaimStatus = "pending" | "processing" | "completed" | "failed";
@@ -74,6 +78,13 @@ type RdUploadResult = {
   summary: string;
   webViewLink: string;
   driveUploadWarning?: string;
+};
+
+type RdCatalogSyncResult = {
+  syncedRows: number;
+  chunksSynced: number;
+  graphNodesSynced: number;
+  graphEdgesSynced: number;
 };
 
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
@@ -150,7 +161,31 @@ type StudySourceDisplay = {
   url: string;
   title: string;
   authoritativeScore: number | null;
+  evidenceId?: string | null;
 };
+
+function parseChatStudySources(value: unknown): StudySourceDisplay[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!isRecord(item) || typeof item.url !== "string" || typeof item.title !== "string") return [];
+    let url: URL;
+    try {
+      url = new URL(item.url);
+    } catch {
+      return [];
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") return [];
+    return [{
+      url: url.toString(),
+      title: item.title,
+      authoritativeScore: typeof item.authoritativeScore === "number"
+        && Number.isFinite(item.authoritativeScore)
+        ? item.authoritativeScore
+        : null,
+      evidenceId: typeof item.evidenceId === "string" ? item.evidenceId : null,
+    }];
+  });
+}
 
 function parseClaimThread(value: unknown): ClaimThread | null {
   if (!isRecord(value)
@@ -260,6 +295,9 @@ export default function MarketingWorkspace() {
   const [rdUploading, setRdUploading] = useState(false);
   const [rdResult, setRdResult] = useState<RdUploadResult | null>(null);
   const [rdError, setRdError] = useState("");
+  const [rdCatalogSyncing, setRdCatalogSyncing] = useState(false);
+  const [rdCatalogSyncResult, setRdCatalogSyncResult] = useState<RdCatalogSyncResult | null>(null);
+  const [rdCatalogSyncError, setRdCatalogSyncError] = useState("");
   const [rdDragOver, setRdDragOver] = useState(false);
   const claimThreadsRef = useRef<ClaimThread[]>([]);
   const activeThreadIdRef = useRef("main");
@@ -369,6 +407,40 @@ export default function MarketingWorkspace() {
       setRdError(error instanceof Error ? error.message : "The R&D study could not be uploaded.");
     } finally {
       setRdUploading(false);
+    }
+  }
+
+  async function syncEvidenceCatalog() {
+    setRdCatalogSyncing(true);
+    setRdCatalogSyncError("");
+    setRdCatalogSyncResult(null);
+    try {
+      const response = await fetch("/api/sync-catalog", { method: "POST" });
+      const payload: unknown = await response.json();
+      if (!response.ok || !isRecord(payload) || payload.ok !== true
+        || typeof payload.syncedRows !== "number"
+        || typeof payload.chunksSynced !== "number"
+        || typeof payload.graphNodesSynced !== "number"
+        || typeof payload.graphEdgesSynced !== "number") {
+        const message = isRecord(payload) && typeof payload.error === "string"
+          ? payload.error
+          : "The Evidence Catalog could not be synced.";
+        throw new Error(message);
+      }
+      const result = {
+        syncedRows: payload.syncedRows,
+        chunksSynced: payload.chunksSynced,
+        graphNodesSynced: payload.graphNodesSynced,
+        graphEdgesSynced: payload.graphEdgesSynced,
+      };
+      setRdCatalogSyncResult(result);
+      toast.success(`${result.syncedRows} Evidence Catalog ${result.syncedRows === 1 ? "study" : "studies"} synced to Supabase.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The Evidence Catalog could not be synced.";
+      setRdCatalogSyncError(message);
+      toast.error("Could not sync Evidence Catalog", { description: message });
+    } finally {
+      setRdCatalogSyncing(false);
     }
   }
 
@@ -639,13 +711,24 @@ export default function MarketingWorkspace() {
     }
   }
 
-  async function sendChatMessage(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const content = chatInput.trim();
+  async function sendChatTurn(
+    messageText: string,
+    requestedSearch?: { type: "evidence" | "firecrawl"; claim: string },
+  ) {
+    const content = messageText.trim();
     if (!content || chatLoading) return;
 
     const userMessage: ChatMessage = { role: "user", content };
     const conversation = [...chatMessages.slice(-19), userMessage];
+    const priorAssistant = [...chatMessages].reverse().find((message) => message.role === "assistant");
+    const affirmative = /^(?:yes|yeah|yep|sure|okay|ok|please do|go ahead|do it|let'?s do it)\b[\s.!?,;:-]*.*$/i.test(content);
+    const searchType = requestedSearch?.type
+      || (affirmative && priorAssistant?.firecrawlSearchAvailable
+        ? "firecrawl"
+        : affirmative && priorAssistant?.evidenceSearchAvailable
+          ? "evidence"
+          : undefined);
+    const workshoppedClaim = requestedSearch?.claim || priorAssistant?.workshoppedClaim;
     setChatMessages(conversation);
     setChatInput("");
     setChatLoading(true);
@@ -654,7 +737,12 @@ export default function MarketingWorkspace() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: conversation }),
+        body: JSON.stringify({
+          messages: conversation,
+          ...(workshoppedClaim ? { workshoppedClaim } : {}),
+          ...(searchType === "evidence" ? { searchEvidence: true } : {}),
+          ...(searchType === "firecrawl" ? { searchExternal: true } : {}),
+        }),
       });
 
       let payload: unknown;
@@ -677,12 +765,25 @@ export default function MarketingWorkspace() {
       const reply = payload.reply.trim();
       const auditReady = reply.match(/\[AUDIT_READY:\s*([^\]]+)\]\s*$/);
       const assistantContent = auditReady ? reply.slice(0, auditReady.index).trim() : reply;
-      if (auditReady) {
-        setClaim(auditReady[1].trim());
+      const replyWorkshoppedClaim = typeof payload.workshoppedClaim === "string"
+        && payload.workshoppedClaim.trim().length <= 180
+        ? payload.workshoppedClaim.trim()
+        : auditReady?.[1].trim();
+      if (replyWorkshoppedClaim) {
+        setClaim(replyWorkshoppedClaim);
       }
+      const studySources = parseChatStudySources(payload.studySources);
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: assistantContent || "This claim is ready to prepare for review.",
+        ...(replyWorkshoppedClaim ? { workshoppedClaim: replyWorkshoppedClaim } : {}),
+        ...(payload.evidenceSearchAvailable === true && replyWorkshoppedClaim
+          ? { evidenceSearchAvailable: true }
+          : {}),
+        ...(payload.firecrawlSearchAvailable === true && replyWorkshoppedClaim
+          ? { firecrawlSearchAvailable: true }
+          : {}),
+        ...(studySources.length > 0 ? { studySources } : {}),
         ...(payload.actionRequired === "SEARCH_AND_AUDIT" && typeof payload.suggestedClaim === "string"
           ? {
             actionRequired: "SEARCH_AND_AUDIT" as const,
@@ -694,13 +795,25 @@ export default function MarketingWorkspace() {
       setChatMessages([...conversation, assistantMessage].slice(-20));
     } catch (error) {
       setChatMessages(chatMessages);
-      setChatInput(content);
+      if (!requestedSearch) setChatInput(content);
       toast.error("Could not get a chat reply", {
         description: error instanceof Error ? error.message : "Please try again.",
       });
     } finally {
       setChatLoading(false);
     }
+  }
+
+  async function sendChatMessage(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await sendChatTurn(chatInput);
+  }
+
+  function searchWithFirecrawl(claimText: string) {
+    void sendChatTurn(
+      "Search external scientific sources online via Firecrawl for this claim.",
+      { type: "firecrawl", claim: claimText },
+    );
   }
 
   async function searchAndRunAudit(actionId: string, suggestedClaim: string) {
@@ -1064,6 +1177,25 @@ export default function MarketingWorkspace() {
                 {chatMessages.map((message, index) => <div className={`fd-chat-message ${message.role === "user" ? "is-user" : "is-assistant"}${message.actionRequired ? " has-action" : ""}`} key={message.actionId ?? `${index}-${message.role}`}>
                   {message.role === "assistant" && <Sparkles aria-hidden="true" />}
                   <p>{message.content}</p>
+                  {message.studySources?.map((source) => <a
+                    className="fd-chat-source"
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    key={source.url}
+                  >
+                    {source.evidenceId ? `${source.evidenceId} · ` : ""}{source.title}
+                  </a>)}
+                  {message.firecrawlSearchAvailable && message.workshoppedClaim && <button
+                    className="fd-chat-action"
+                    type="button"
+                    disabled={chatLoading}
+                    onClick={() => {
+                      if (message.workshoppedClaim) searchWithFirecrawl(message.workshoppedClaim);
+                    }}
+                  >
+                    <Search aria-hidden="true" />Search External Studies via Firecrawl
+                  </button>}
                   {message.actionRequired === "SEARCH_AND_AUDIT" && message.suggestedClaim && message.actionId && <button
                     className="fd-chat-action"
                     type="button"
@@ -1146,6 +1278,14 @@ export default function MarketingWorkspace() {
             </div>
             <form className="rd-study-form" onSubmit={submitRdStudy}>
               <div className="rd-form-heading"><div><span className="rd-portal-kicker">New submission</span><h3>Study details</h3></div><span className="rd-required-note">* Required</span></div>
+              <div className="rd-catalog-sync">
+                <button className="rd-catalog-sync-button" type="button" onClick={() => void syncEvidenceCatalog()} disabled={rdCatalogSyncing || rdUploading}>
+                  {rdCatalogSyncing ? <LoaderCircle className="rd-spinner" aria-hidden="true" /> : <Layers3 aria-hidden="true" />}
+                  {rdCatalogSyncing ? "Syncing Evidence Catalog..." : "Sync Sheet to DB"}
+                </button>
+                {rdCatalogSyncResult && <p role="status">{rdCatalogSyncResult.syncedRows} studies, {rdCatalogSyncResult.chunksSynced} chunks, and {rdCatalogSyncResult.graphNodesSynced} graph nodes synced.</p>}
+                {rdCatalogSyncError && <p role="alert">{rdCatalogSyncError}</p>}
+              </div>
               <label className="rd-field rd-field-wide">
                 <span>Study Title <b>*</b></span>
                 <input value={rdStudyTitle} onChange={(event) => { setRdStudyTitle(event.target.value); setRdResult(null); }} maxLength={300} placeholder="e.g., Effects of daily fiber intake on digestive comfort" required />
@@ -1211,8 +1351,8 @@ export default function MarketingWorkspace() {
               </label>
               {rdError && <p className="rd-form-error" role="alert">{rdError}</p>}
               {rdUploading && <div className="rd-upload-progress" role="status" aria-live="polite">
-                <div className="rd-progress-current"><span className="rd-progress-number">01</span><span>Extracting study metadata &amp; embeddings...</span></div>
-                <div className="rd-progress-next"><span className="rd-progress-number">02</span><span>Saving to Drive &amp; Priority Pending Studies...</span></div>
+                <div className="rd-progress-current"><span className="rd-progress-number">01</span><span>Extracting study metadata while uploading the PDF to Drive...</span></div>
+                <div className="rd-progress-next"><span className="rd-progress-number">02</span><span>Embedding and saving to Supabase &amp; Priority Pending Studies...</span></div>
               </div>}
               {rdResult && <div className="rd-success-card" role="status">
                 <CheckCircle2 aria-hidden="true" />
