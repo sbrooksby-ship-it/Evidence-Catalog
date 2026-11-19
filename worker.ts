@@ -19,6 +19,7 @@ interface WorkerEnvironment {
   NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
   GOOGLE_SERVICE_ACCOUNT_EMAIL?: string;
   GOOGLE_PRIVATE_KEY?: string;
+  GOOGLE_DRIVE_FOLDER_ID?: string;
   RD_SHEET_ID?: string;
 }
 
@@ -1749,6 +1750,15 @@ function decodePrivateKey(privateKey: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function decodeBase64Bytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 async function getGoogleSheetsAccessToken(email: string, privateKey: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const normalizedPrivateKey = privateKey.replace(/\\n/g, "\n").trim();
@@ -1773,7 +1783,7 @@ async function getGoogleSheetsAccessToken(email: string, privateKey: string): Pr
   const header = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
   const claims = base64UrlEncode(new TextEncoder().encode(JSON.stringify({
     iss: email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
+    scope: "https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -1825,12 +1835,104 @@ async function getGoogleSheetsAccessToken(email: string, privateKey: string): Pr
   return payload.access_token;
 }
 
+type DriveFilePermission =
+  | { role: "reader"; type: "anyone" }
+  | { role: "reader"; type: "domain"; domain: string };
+
+async function grantDriveFilePermission(
+  fileId: string,
+  accessToken: string,
+  permission: DriveFilePermission,
+): Promise<void> {
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions?supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(permission),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  if (!response.ok) {
+    const errorBody = (await response.text()).slice(0, 500);
+    throw new Error(`Google Drive permission update failed with HTTP ${response.status}: ${errorBody}`);
+  }
+}
+
+async function uploadRdStudyToDrive(
+  folderId: string,
+  accessToken: string,
+  evidenceId: string,
+  fileName: string,
+  fileMimeType: string,
+  fileBase64: string,
+): Promise<string> {
+  const boundary = `worker-${crypto.randomUUID()}`;
+  const encoder = new TextEncoder();
+  const fileBytes = decodeBase64Bytes(fileBase64);
+  const multipartPrefix = encoder.encode(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${
+      JSON.stringify({ name: fileName || `${evidenceId}.pdf`, parents: [folderId] })
+    }\r\n--${boundary}\r\nContent-Type: ${fileMimeType || "application/pdf"}\r\n\r\n`,
+  );
+  const multipartSuffix = encoder.encode(`\r\n--${boundary}--`);
+  const multipartBody = new Uint8Array(multipartPrefix.length + fileBytes.length + multipartSuffix.length);
+  multipartBody.set(multipartPrefix);
+  multipartBody.set(fileBytes, multipartPrefix.length);
+  multipartBody.set(multipartSuffix, multipartPrefix.length + fileBytes.length);
+
+  const response = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,webViewLink",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": `multipart/related; boundary="${boundary}"`,
+      },
+      body: multipartBody,
+      signal: AbortSignal.timeout(60_000),
+    },
+  );
+  if (!response.ok) {
+    const errorBody = (await response.text()).slice(0, 1_000);
+    console.error("Google Drive R&D study upload failed.", {
+      status: response.status,
+      errorBody,
+    });
+    throw new Error(`The study PDF could not be uploaded to Google Drive (HTTP ${response.status}).`);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || typeof payload.id !== "string" || typeof payload.webViewLink !== "string") {
+    console.error("Google Drive returned an invalid study upload response.");
+    throw new Error("Google Drive did not return the study file link.");
+  }
+
+  try {
+    await grantDriveFilePermission(payload.id, accessToken, { role: "reader", type: "anyone" });
+  } catch (error) {
+    console.error("Google Drive anyone-reader sharing failed; retrying with domain access.", error);
+    try {
+      await grantDriveFilePermission(payload.id, accessToken, {
+        role: "reader",
+        type: "domain",
+        domain: "balanceofnature.com",
+      });
+    } catch (domainError) {
+      console.error("Google Drive domain-reader sharing failed; preserving the study link.", domainError);
+    }
+  }
+  return payload.webViewLink;
+}
+
 function googleSheetsRangeUrl(spreadsheetId: string, range: string): string {
   return `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`;
 }
 
 async function nextRdEvidenceId(spreadsheetId: string, accessToken: string): Promise<string> {
-  const response = await fetch(googleSheetsRangeUrl(spreadsheetId, "'Evidence Catalog'!A2:A50"), {
+  const response = await fetch(googleSheetsRangeUrl(spreadsheetId, "'Priority Pending Studies'!A2:A50"), {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(15_000),
   });
@@ -1839,7 +1941,7 @@ async function nextRdEvidenceId(spreadsheetId: string, accessToken: string): Pro
       status: response.status,
       errorBody: (await response.text()).slice(0, 500),
     });
-    throw new Error("The Evidence Catalog sheet could not be read.");
+    throw new Error("The Priority Pending Studies sheet could not be read.");
   }
   const payload: unknown = await response.json();
   const values = isRecord(payload) && Array.isArray(payload.values) ? payload.values : [];
@@ -1857,7 +1959,7 @@ async function appendRdEvidenceRow(
   accessToken: string,
   values: string[],
 ): Promise<void> {
-  const range = encodeURIComponent("'Evidence Catalog'!A1:M6");
+  const range = encodeURIComponent("'Priority Pending Studies'!A1:S2");
   const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${range}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`;
   const response = await fetch(url, {
     method: "POST",
@@ -1873,7 +1975,7 @@ async function appendRdEvidenceRow(
       status: response.status,
       errorBody: (await response.text()).slice(0, 500),
     });
-    throw new Error("The Evidence Catalog sheet could not be updated.");
+    throw new Error("The Priority Pending Studies sheet could not be updated.");
   }
 }
 
@@ -1935,6 +2037,7 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
   const geminiApiKey = env.GEMINI_API_KEY;
   const googleEmail = env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const googlePrivateKey = env.GOOGLE_PRIVATE_KEY;
+  const driveFolderId = env.GOOGLE_DRIVE_FOLDER_ID?.trim();
   const spreadsheetId = env.RD_SHEET_ID;
   const missing = [
     !supabaseUrl ? "SUPABASE_URL or NEXT_PUBLIC_SUPABASE_URL" : null,
@@ -2003,6 +2106,13 @@ async function handleRdUpload(request: Request, env: WorkerEnvironment): Promise
   if (!fileBase64 && !studyText) {
     return jsonResponse({ error: "Upload a PDF or enter the study text before submitting." }, 400);
   }
+  if (fileBase64 && !driveFolderId) {
+    console.error("GOOGLE_DRIVE_FOLDER_ID is not configured for R&D PDF uploads.");
+    return jsonResponse({
+      error: "Google Drive storage is not configured for PDF uploads.",
+      missing: ["GOOGLE_DRIVE_FOLDER_ID"],
+    }, 500);
+  }
 
   const fallbackMetadata: RdStudyMetadata = {
     evidence_type: evidenceType,
@@ -2039,6 +2149,7 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
   let chunks: string[] = [];
   let metadata = fallbackMetadata;
   let evidenceId = "";
+  let webViewLink = "";
   let chunksStored = 0;
   let insertedInSupabase = false;
   let ingestionStage = "Gemini study extraction";
@@ -2164,8 +2275,19 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
 
     ingestionStage = "Google Sheets authorization";
     const accessToken = await getGoogleSheetsAccessToken(googleEmail, googlePrivateKey);
-    ingestionStage = "Evidence Catalog ID lookup";
+    ingestionStage = "Priority Pending Studies ID lookup";
     evidenceId = await nextRdEvidenceId(spreadsheetId, accessToken);
+    if (fileBase64 && driveFolderId) {
+      ingestionStage = "Google Drive study upload";
+      webViewLink = await uploadRdStudyToDrive(
+        driveFolderId,
+        accessToken,
+        evidenceId,
+        fileName,
+        fileMimeType,
+        fileBase64,
+      );
+    }
     const sourceUrl = `rd-study://${evidenceId}`;
     const rows = chunks.map((chunk, index) => {
       const embedding = embeddings[index];
@@ -2181,6 +2303,7 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
         metadata: {
           evidence_id: evidenceId,
           ...metadata,
+          ...(webViewLink ? { drive_web_view_link: webViewLink } : {}),
           chunk_index: index,
           chunk_count: chunks.length,
         },
@@ -2209,7 +2332,7 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
     insertedInSupabase = true;
     chunksStored = rows.length;
 
-    ingestionStage = "Evidence Catalog row append";
+    ingestionStage = "Priority Pending Studies row append";
     await appendRdEvidenceRow(spreadsheetId, accessToken, [
       evidenceId,
       title,
@@ -2224,15 +2347,21 @@ Do not invent findings, populations, doses, or mappings. Use "Not specified" onl
       metadata.permitted_conclusion,
       metadata.limitations,
       metadata.product_relevance,
+      "",
+      "",
+      "",
+      "",
+      "",
+      webViewLink,
     ]);
-    return jsonResponse({ ok: true, evidenceId, chunksStored, summary: metadata.key_findings });
+    return jsonResponse({ ok: true, evidenceId, chunksStored, summary: metadata.key_findings, webViewLink });
   } catch (error) {
     console.error("R&D study ingestion failed.", error);
     const detail = error instanceof Error ? error.message : "Unknown ingestion error";
     const stageDetail = ingestionStage ? ` at ${ingestionStage}` : "";
     return insertedInSupabase
       ? jsonResponse({
-        error: "The study is stored in Supabase, but syncing it to Evidence Catalog failed. Contact an administrator before retrying.",
+        error: "The study is stored in Supabase, but syncing it to Priority Pending Studies failed. Contact an administrator before retrying.",
         evidenceId,
         chunksStored,
         detail,

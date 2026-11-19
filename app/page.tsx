@@ -72,6 +72,7 @@ type RdUploadResult = {
   evidenceId: string;
   chunksStored: number;
   summary: string;
+  webViewLink: string;
 };
 
 const CLAIM_THREAD_COLUMNS = "id, topic_title, proposed_claim, target_tier, supporting_study, work_email, status, ai_evaluation, created_at";
@@ -347,7 +348,8 @@ export default function MarketingWorkspace() {
       if (!response.ok || !isRecord(payload) || payload.ok !== true
         || typeof payload.evidenceId !== "string"
         || typeof payload.chunksStored !== "number"
-        || typeof payload.summary !== "string") {
+        || typeof payload.summary !== "string"
+        || typeof payload.webViewLink !== "string") {
         const message = isRecord(payload) && typeof payload.error === "string"
           ? payload.error
           : "The R&D study could not be uploaded.";
@@ -357,6 +359,7 @@ export default function MarketingWorkspace() {
         evidenceId: payload.evidenceId,
         chunksStored: payload.chunksStored,
         summary: payload.summary,
+        webViewLink: payload.webViewLink,
       });
     } catch (error) {
       setRdError(error instanceof Error ? error.message : "The R&D study could not be uploaded.");
@@ -1205,11 +1208,11 @@ export default function MarketingWorkspace() {
               {rdError && <p className="rd-form-error" role="alert">{rdError}</p>}
               {rdUploading && <div className="rd-upload-progress" role="status" aria-live="polite">
                 <div className="rd-progress-current"><span className="rd-progress-number">01</span><span>Extracting study metadata &amp; embeddings...</span></div>
-                <div className="rd-progress-next"><span className="rd-progress-number">02</span><span>Syncing to Evidence Catalog...</span></div>
+                <div className="rd-progress-next"><span className="rd-progress-number">02</span><span>Saving to Drive &amp; Priority Pending Studies...</span></div>
               </div>}
               {rdResult && <div className="rd-success-card" role="status">
                 <CheckCircle2 aria-hidden="true" />
-                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Evidence Catalog.</p><small>{rdResult.summary}</small><button className="rd-reset-button" type="button" onClick={resetRdStudyForm}>Start another upload</button></div>
+                <div><strong>Study ingested successfully</strong><p><b>{rdResult.evidenceId}</b> · {rdResult.chunksStored} searchable {rdResult.chunksStored === 1 ? "chunk" : "chunks"} stored in Supabase and synced to Priority Pending Studies.</p><small>{rdResult.summary}</small>{rdResult.webViewLink && <a className="rd-drive-link" href={rdResult.webViewLink} target="_blank" rel="noreferrer">View Study in Drive</a>}<button className="rd-reset-button" type="button" onClick={resetRdStudyForm}>Start another upload</button></div>
               </div>}
               <button className="rd-submit-button" type="submit" disabled={rdUploading || (!rdFileBase64 && !rdStudyText.trim())}>
                 {rdUploading ? "Extracting study metadata & embeddings..." : "Ingest R&D Study"}
