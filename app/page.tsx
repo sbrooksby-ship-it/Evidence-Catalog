@@ -1074,7 +1074,7 @@ export default function MarketingWorkspace() {
           <div className="rd-portal-content">
             <div className="rd-portal-intro">
               <span className="rd-portal-kicker">Research ingestion</span>
-              <h2>Bring your study<br /><em>into the evidence library.</em></h2>
+              <h2>Bring your study<br /><em>into the evidence catalog.</em></h2>
               <p>Upload an internal study or paste its text. We’ll extract the study details, store searchable sections, and add this R&amp;D record to the Evidence Catalog sheet.</p>
               <div className="rd-ingestion-note"><FileCheck2 aria-hidden="true" /><span>R&amp;D submissions are kept separate from claim audits.</span></div>
             </div>
