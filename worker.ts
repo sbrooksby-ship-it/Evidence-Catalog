@@ -326,7 +326,7 @@ async function generateEmbeddingBatch(
         },
         body: JSON.stringify({
           requests: inputs.map(({ text, dimensions }) => ({
-            model: "models/gemini-embedding-001",
+            model: "models/gemini-embedding-002",
             content: { parts: [{ text: text.slice(0, 6_000) }] },
             taskType,
             outputDimensionality: dimensions,
