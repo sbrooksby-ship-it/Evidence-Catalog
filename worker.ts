@@ -1,4 +1,4 @@
-const GEMINI_GENERATION_MODEL = "gemini-3.5-flash-lite";
+const GEMINI_GENERATION_MODEL = "gemini-3.1-flash-lite";
 
 interface ChatMessage {
   role: "user" | "assistant";
